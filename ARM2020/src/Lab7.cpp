@@ -15,8 +15,8 @@
 #include <cstring>
 #include "ITM_write.h"
 
-#define EX1 1
-#define EX2 1
+#define EX1 0
+#define EX2 0
 #define EX3 1
 
 static constexpr size_t kTicksPerSecond{ 1'000'000 };
@@ -46,25 +46,27 @@ static void prvSetupHardware() {
 	Board_Init();
 	heap_monitor_setup();
 	ITM_init();
-	Chip_SCTPWM_Init(LPC_SCT0);
-
+	Board_LED_Set(0, false);
+	Board_LED_Set(1, false);
+	Board_LED_Set(2, false);
 	auto const prescale = SystemCoreClock / kTicksPerSecond - 1;
+	Chip_SCTPWM_Init(LPC_SCT0);
 
 #if EX1 | EX2
 
-	LPC_SCT0->CONFIG = 1 << 0 | 1 << 17; // Unified timer | auto limiting
-	LPC_SCT0->CTRL_U |= prescale << 5;
+	LPC_SCT0->CONFIG = SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L;
+	LPC_SCT0->CTRL_U = SCT_CTRL_PRE_L(prescale) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
 	LPC_SCT0->MATCHREL[0].U = kPeriod;
 	LPC_SCT0->MATCHREL[1].U = kPeriod * xDutyCycle / 100;
 	LPC_SCT0->EVENT[0].STATE = LPC_SCT0->EVENT[1].STATE = 0xFFFFFFFF;
-	LPC_SCT0->EVENT[0].CTRL = 0 << 0 | 1 << 12; // Throwing in the 0 << 0 no-op just to be explicit
+	LPC_SCT0->EVENT[0].CTRL = 0 << 0 | 1 << 12;
 	LPC_SCT0->EVENT[1].CTRL = 1 << 0 | 1 << 12;
 
 #elif EX3
-
-	LPC_SCT0->CONFIG = 1 << 17 | 1 << 18; // Auto limit low timer | Auto limit high timer
-	LPC_SCT0->CTRL_L |= prescale << 5;
-	LPC_SCT0->CTRL_H |= prescale << 5;
+	LPC_SCT0->CONFIG = SCT_CONFIG_16BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L | SCT_CONFIG_AUTOLIMIT_H;
+	LPC_SCT0->CTRL_U =
+			SCT_CTRL_PRE_L(prescale) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L |
+			SCT_CTRL_PRE_H(prescale) | SCT_CTRL_CLRCTR_H | SCT_CTRL_HALT_H;
 	LPC_SCT0->MATCHREL[0].L = kPeriod;
 	LPC_SCT0->MATCHREL[1].L = xRedDutyCycle;
 	LPC_SCT0->MATCHREL[0].H = kPeriod;
@@ -77,8 +79,8 @@ static void prvSetupHardware() {
 	LPC_SCT0->CTRL_H &= ~(1 << 2); // Start high timer
 
 	Chip_SCTPWM_Init(LPC_SCT1);
-	LPC_SCT1->CONFIG = 1 << 17 | 1 << 18;
-	LPC_SCT1->CTRL_L |= prescale << 5;
+	LPC_SCT1->CONFIG = SCT_CONFIG_16BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L | SCT_CONFIG_AUTOLIMIT_H;
+	LPC_SCT1->CTRL_U = SCT_CTRL_PRE_L(prescale) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
 	LPC_SCT1->MATCHREL[0].L = kPeriod;
 	LPC_SCT1->MATCHREL[1].L = xBlueDutyCycle;
 	LPC_SCT1->EVENT[0].STATE = LPC_SCT1->EVENT[1].STATE = 0xFFFFFFFF;
@@ -128,14 +130,15 @@ int main(void) {
 				xDutyCycle += 1;
 				if (xDutyCycle > kMaxDutyCycle)
 					xDutyCycle = kMaxDutyCycle;
+				LPC_SCT0->MATCHREL[1].U = kPeriod * xDutyCycle / 100;
+				ITM_print("Duty cycle: %d%%\r\n", xDutyCycle.load());
 			} else if (ioButton3.read()) {
 				xDutyCycle -= 1;
 				if (xDutyCycle < kMinDutyCycle)
 					xDutyCycle = kMinDutyCycle;
+				LPC_SCT0->MATCHREL[1].U = kPeriod * xDutyCycle / 100;
+				ITM_print("Duty cycle: %d%%\r\n", xDutyCycle.load());
 			}
-
-			LPC_SCT0->MATCHREL[1].U = kPeriod * xDutyCycle / 100;
-			ITM_print("Duty cycle: %d%%\r\n", xDutyCycle.load());
 
 			vTaskDelay(configTICK_RATE_HZ / xTimerFrequency);
 		}
@@ -211,7 +214,6 @@ int main(void) {
 							LPC_SCT1->MATCHREL[1].L = xBlueDutyCycle;
 						}
 					}
-
 					count = 0;
 				} else {
 					USB_send((uint8_t *) &rcv_buffer[i], 1);
@@ -229,9 +231,9 @@ int main(void) {
 				}
 			}
 		}
-	}, "Command Reader", configMINIMAL_STACK_SIZE + 128, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
+	}, "Command Reader", configMINIMAL_STACK_SIZE + 256, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 
-	xTaskCreate(cdc_task, "CDC", configMINIMAL_STACK_SIZE + 128, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
+	xTaskCreate(cdc_task, "CDC", configMINIMAL_STACK_SIZE, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 
 #endif
 	vTaskStartScheduler();

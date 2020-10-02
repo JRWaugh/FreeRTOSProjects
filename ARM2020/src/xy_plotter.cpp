@@ -12,7 +12,7 @@
 
 static constexpr size_t kTicksPerSecond{ 1'000'000 };
 static LPCPinMap constexpr pinmapXStep{ 0, 24 }, pinmapXDir{ 1,   0 }, pinmapXOrigin{ 0,  9 }, pinmapXLimit{ 0, 29 };
-static LPCPinMap constexpr pinmapYStep{ 0, 27 }, pinmapYDir{ 0,  28 }, pinmapYOrigin{ 0,  0 }, pinmapYLimit{ 1,  3 };
+static LPCPinMap constexpr pinmapYStep{ 0, 27 }, pinmapYDir{ 0,  28 }, pinmapYOrigin{ 1,  3 }, pinmapYLimit{ 0,  0 };
 static Axis* X, * Y;
 
 static void prvSetupHardware() {
@@ -23,12 +23,10 @@ static void prvSetupHardware() {
 	Chip_SCTPWM_Init(LPC_SCT2);
 	LPC_SCT2->CONFIG = SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L;
 	LPC_SCT2->CTRL_U = SCT_CTRL_PRE_L(prescale) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
-	LPC_SCT2->CTRL_L |= 1 << 2;
-	LPC_SCT2->EVENT[0].STATE = 1 << 0;
-	LPC_SCT2->EVENT[1].STATE = 1 << 0;
+	LPC_SCT2->EVENT[0].STATE = LPC_SCT2->EVENT[1].STATE = 1 << 0;
 	LPC_SCT2->EVENT[0].CTRL = 0 << 0 | 1 << 12;
 	LPC_SCT2->EVENT[1].CTRL = 1 << 0 | 1 << 12;
-	LPC_SCT2->RES = 3 << 0 | 3 << 2;
+	LPC_SCT2->RES = 0xF;
 	LPC_SCT2->CTRL_L &= ~(1 << 2);
 	NVIC_SetPriority(SCT2_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY + 1);
 	NVIC_EnableIRQ(SCT2_IRQn);
@@ -88,8 +86,8 @@ int main(void) {
 		}
 	};
 
-	X->enqueueMove({ Axis::Message::Relative, -2000 });
-	Y->enqueueMove({ Axis::Message::Relative, -2000 });
+	X->enqueueMove({ Move::Relative, -2000 });
+	Y->enqueueMove({ Move::Relative, -2000 });
 
 #if 0
 	xTaskCreate([](){

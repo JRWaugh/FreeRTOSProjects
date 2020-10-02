@@ -17,14 +17,16 @@
 
 #define ACCELERATING 0
 
+struct Move {
+	enum { Absolute, Relative };
+	bool isRelative;
+	BaseType_t numberOfSteps;
+};
+
 class Axis {
 public:
 	enum Direction { Clockwise = 0, CounterClockwise };
-	struct Message {
-		enum Command { Absolute, Relative };
-		Command command;
-		BaseType_t stepsToMove;
-	};
+
 	static constexpr size_t kInitialPPS{ 600 }, kPPSDelta{ 100 }, kHalfStepsPerRev{ 400 };
 
 	Axis(	DigitalIOPin ioStep,
@@ -99,11 +101,11 @@ public:
 		return ioOriginSW.read() && ioLimitSW.read();
 	}
 
-	void enqueueMove(Message const & message) {
+	void enqueueMove(Move const & message) {
 		queue.push_back(message);
 	}
 
-	Message dequeueMove() {
+	Move dequeueMove() {
 		return queue.pop_front();
 	}
 
@@ -160,10 +162,6 @@ private:
 		return static_cast<Direction>(ioDirection.read());
 	}
 
-	Direction toggleDirection() noexcept {
-		return static_cast<Direction>(ioDirection.toggle());
-	}
-
 	static void prvAxisTask(void* pvParameters) {
 		vTaskDelay(10);
 
@@ -174,11 +172,11 @@ private:
 		axis->calibrate();
 
 		while (true) {
-			Message message = axis->dequeueMove();
-			if (message.command == Message::Relative) {
-				axis->moveToRelativePosition(message.stepsToMove);
+			Move move = axis->dequeueMove();
+			if (move.isRelative) {
+				axis->moveToRelativePosition(move.numberOfSteps);
 			} else
-				axis->moveToAbsolutePosition(message.stepsToMove);
+				axis->moveToAbsolutePosition(move.numberOfSteps);
 		}
 	}
 
@@ -190,7 +188,7 @@ private:
 	std::atomic<bool> stepping{ false };
 	int32_t stepsPerSecond{ 1000 };
 	SemaphoreHandle_t moveComplete{ xSemaphoreCreateBinary() };
-	QueueWrapper<Message, 6> queue;
+	QueueWrapper<Move, 6> queue;
 #if ACCELERATING
 	float volatile stepsPerSecond, stepsPerSecondAccel;
 #endif
