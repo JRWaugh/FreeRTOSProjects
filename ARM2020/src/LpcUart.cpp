@@ -9,7 +9,6 @@
 #include <mutex>
 #include "LpcUart.h"
 
-
 static LpcUart* u0;
 static LpcUart* u1;
 static LpcUart* u2;
@@ -121,9 +120,8 @@ LpcUart::LpcUart(LpcUart::Config const & cfg) : uart{ cfg.pUART }, notify_rx{ nu
 
 	/* Enable receive data and line status interrupt */
 	Chip_UART_IntEnable(uart, UART_INTEN_RXRDY);
-	Chip_UART_IntDisable(uart, UART_INTEN_TXRDY);   /* May not be needed */
+	Chip_UART_IntDisable(uart, UART_INTEN_TXRDY);	/* May not be needed */
 
-	/* Enable UART interrupt */
 	if (uart == LPC_USART0) {
 		u0 = this;
 		irqn = UART0_IRQn;
@@ -136,7 +134,6 @@ LpcUart::LpcUart(LpcUart::Config const & cfg) : uart{ cfg.pUART }, notify_rx{ nu
 	}
 
 	NVIC_SetPriority(irqn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY + 1);
-	/* Enable UART interrupt */
 	NVIC_EnableIRQ(irqn);
 }
 
@@ -180,9 +177,8 @@ int LpcUart::read(char* buffer, int len) {
 
 	if (RingBuffer_GetCount(&rxring) <= 0) {
 		notify_rx = xTaskGetCurrentTaskHandle();
-		while (RingBuffer_GetCount(&rxring) <= 0) {
-			ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
-		}
+		while (RingBuffer_GetCount(&rxring) <= 0)
+			ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 		notify_rx = nullptr;
 	}
 
@@ -203,12 +199,12 @@ int LpcUart::read(char* buffer, int len, TickType_t total_timeout, TickType_t ic
 	notify_rx = xTaskGetCurrentTaskHandle();
 	while (RingBuffer_GetCount(&rxring) < len && xTaskCheckForTimeOut(&timeoutState, &total_timeout) == pdFALSE) {
 		TickType_t timeout = total_timeout > ic_timeout ? ic_timeout : total_timeout;
-		if (ulTaskNotifyTake( pdTRUE, timeout ) == 0)
+		if (ulTaskNotifyTake(pdTRUE, timeout) == 0)
 			break;
 	}
 	notify_rx = nullptr;
 
-	return Chip_UART_ReadRB(uart, &rxring, buffer, len);;
+	return Chip_UART_ReadRB(uart, &rxring, buffer, len);
 }
 
 int LpcUart::write(char c) {

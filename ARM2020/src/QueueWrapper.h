@@ -47,13 +47,13 @@ public:
 	}
 
 	// Dangerous function
-	[[nodiscard]] T pop_back(TickType_t ticksToWait = portMAX_DELAY) {
+	[[nodiscard]] T pop_front(TickType_t ticksToWait = portMAX_DELAY) {
 		T t;
 		if (!is_interrupt())
 			xQueueReceive(queue, &t, ticksToWait);
 		else {
 			portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-			xQueueSendToBackFromISR(queue, &t, &xHigherPriorityWoken);
+			xQueueReceiveFromISR(queue, &t, &xHigherPriorityWoken);
 			portEND_SWITCHING_ISR(xHigherPriorityWoken);
 		}
 		return t;

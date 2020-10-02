@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <chip.h>
 #include "ITM_write.h"
+#include <stdarg.h>
+
 // ******************************************************************
 // Cortex-M SWO Trace / Debug registers used for accessing ITM
 // ******************************************************************
@@ -53,5 +55,15 @@ int ITM_write(char const * pcBuffer) {
 	} else
 		// Function returns zero if nothing was written
 		return 0;
+}
+
+int ITM_print(char const * format, ...) {
+	static char buffer[256];
+	va_list argptr;
+	va_start(argptr, format);
+	vsprintf(buffer, format, argptr);
+	va_end(argptr);
+
+	return ITM_write(buffer);
 }
 

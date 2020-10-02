@@ -12,6 +12,7 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "Mutex.h"
+#include <cstdarg>
 #include "LPCPinMap.h"
 
 class LpcUart {
@@ -35,6 +36,31 @@ public:
 	int  write(char c);
 	int  write(char const * s);
 	int  write(char const * buffer, int len);
+	int  print(char const * format, ...) {
+		static char buffer[256];
+		std::lock_guard<FreeRTOS::Mutex> lock(write_mutex);
+		va_list argptr;
+		va_start(argptr, format);
+		int len = vsprintf(buffer, format, argptr);
+		va_end(argptr);
+		int pos = 0;
+		notify_tx = xTaskGetCurrentTaskHandle();
+
+		while (len > pos) {
+			// restrict single write to ring buffer size
+			int size = (len - pos) > UART_RB_SIZE ? UART_RB_SIZE : (len - pos);
+
+			// wait until we have space in the ring buffer
+			while (UART_RB_SIZE - RingBuffer_GetCount(&txring) < size) {
+				ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
+			}
+			pos += Chip_UART_SendRB(uart, &txring, buffer+pos, size);
+		}
+
+		notify_tx = nullptr;
+
+		return pos;
+	}
 	int  read(char& c); /* get a single character. Returns number of characters read --> returns 0 if no character is available */
 	int  read(char* buffer, int len);
 	int  read(char* buffer, int len, TickType_t total_timeout, TickType_t ic_timeout = portMAX_DELAY);

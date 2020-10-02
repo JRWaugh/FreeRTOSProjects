@@ -109,6 +109,7 @@ typedef struct {
 	};
 
 	uint32_t RESERVED1[9];				/*!< 0x03C reserved */
+
 	union {
 		__IO uint32_t COUNT_U;			/*!< counter register */
 		struct {
@@ -128,6 +129,7 @@ typedef struct {
 	};
 
 	__I  uint32_t INPUT;				/*!< input register */
+
 	union {
 		__IO uint32_t REGMODE;			/*!< RegMode register */
 		struct {

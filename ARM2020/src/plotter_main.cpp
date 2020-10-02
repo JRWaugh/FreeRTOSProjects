@@ -18,48 +18,55 @@
 #include <atomic>
 
 #define CALIBRATE_MAX_WIDTH 1
-#define CALIBRATE_MAX_PPS 1
+#define CALIBRATE_MAX_PPS 0
 #define USING_SIM_PINS 1
 
+struct Stepper {
+	DigitalIOPin ioStep, ioDirection, ioOriginSW, ioLimitSW;
+	void onStep() {
+		ioStep.write(true);
+		ioStep.write(false);
+	}
+};
+
 namespace Plotter {
-/* Constants */
-static constexpr LPCPinMap stepPinMap{ 0, 24 };
-static constexpr LPCPinMap 	dirPinMap{ 1,  0 };
-#if USING_SIM_PINS
-static constexpr LPCPinMap LSw1PinMap{ 0,  9 };
-static constexpr LPCPinMap LSw2PinMap{ 0, 29 };
-#else
-static constexpr LPCPinMap LSw1PinMap{ 0, 27 };
-static constexpr LPCPinMap LSw2PinMap{ 0, 28 };
-#endif
+
+static constexpr LPCPinMap pinmapXStep{ 0, 24 }, pinmapXDir{ 1,  0 }, pinmapXOrigin{ 0,  9 }, pinmapXLimit{ 0, 29 };
+static Stepper* stepperX, * stepperY;
+static DigitalIOPin* ioXDirPin, * ioXOriginPin, *ioXLimitPin;
+static void (*prvStartPulsingX)(BaseType_t xPulsesPerSecond);
+static void (*prvStopPulsingX)();
+
+static constexpr LPCPinMap pinmapYStep{ 0, 27 }, pinmapYDir{ 0,  28 }, pinmapYOrigin{ 1,  3 }, pinmapYLimit{ 0, 0 };
+static DigitalIOPin* ioYDirPin, * ioYOriginPin, *ioYLimitPin;
+static void (*prvStartPulsingY)(BaseType_t xPulsesPerSecond);
+static void (*prvStopPulsingY)();
 
 static constexpr BaseType_t kInitialPPS{ 600 }, kPPSDelta{ 100 }, kHalfStepsPerRev{ 400 };
 
 static std::atomic<bool> bIsPlotting{ false };
-static BaseType_t xMaximumPPS{ INT32_MAX }, xJourneyLength{ 0 }, xTargetPPS{ kInitialPPS };
+static BaseType_t xMaximumPPS{ kInitialPPS }, xJourneyLength{ 0 };
 static volatile float xCurrentPPS{ kInitialPPS }, fLinearPPSAccel{ 0 };
-static DigitalIOPin* ioDirPin, * ioOriginPin, *ioLimitPin;
+
 static std::atomic<BaseType_t > xCurrentPosition{ 0 }, xRemainingJourneyLength{ 0 }, xPlotterWidth{ 0 };
 static EventGroupHandle_t xPlotterFlagGroup;
 static SemaphoreHandle_t xMoveComplete;
 static QueueWrapper<Message, 7>* xMessages;
-static void (*prvStartPulsing)(BaseType_t xPulsesPerSecond);
-static void (*prvStopPulsing)();
 static TickType_t xOriginTimeStamp{ 0 }, xLimitTimeStamp{ 0 };
 
 /*****************************************************************************
  * Private functions
  ****************************************************************************/
 static void inline prvSetDirection(Direction eDirection) noexcept {
-	ioDirPin->write(eDirection);
+	ioXDirPin->write(eDirection);
 }
 
 [[nodiscard]] static inline Direction prvGetDirection() noexcept {
-	return static_cast<Direction>(ioDirPin->read());
+	return static_cast<Direction>(ioXDirPin->read());
 }
 
 static inline Direction prvToggleDirection() noexcept {
-	return static_cast<Direction>(ioDirPin->toggle());
+	return static_cast<Direction>(ioXDirPin->toggle());
 }
 
 static void prvPrintStats() {
@@ -74,7 +81,7 @@ static void prvPrintStats() {
 static void prvMove() noexcept {
 	xCurrentPPS = kInitialPPS;
 
-	prvStartPulsing(kInitialPPS);
+	prvStartPulsingX(kInitialPPS);
 	bIsPlotting = true;
 
 	// Wait for semaphore given by prvTerminateMove
@@ -87,7 +94,7 @@ static void prvMove() noexcept {
 // Will be called when remaining steps reach 0 or when a limit switch is hit.
 static void prvTerminateMove() {
 	if (bIsPlotting) {
-		prvStopPulsing();
+		prvStopPulsingX();
 		bIsPlotting = false;
 
 		portBASE_TYPE xHigherPriorityWoken = pdFALSE;
@@ -106,7 +113,7 @@ static void prvMoveToRelativePosition(BaseType_t xOffsetFromPosition) {
 
 	xRemainingJourneyLength = xJourneyLength = abs(xOffsetFromPosition);
 
-	fLinearPPSAccel = (xTargetPPS - kInitialPPS) / (xJourneyLength * 0.1f);
+	fLinearPPSAccel = (xMaximumPPS - kInitialPPS) / (xJourneyLength * 0.1f);
 	if (fLinearPPSAccel > xMaximumPPS)
 		fLinearPPSAccel = xMaximumPPS;
 	else if (fLinearPPSAccel < 0)
@@ -126,28 +133,29 @@ static void prvCalibratePlotter() {
 	prvMoveToRelativePosition(INT16_MIN);
 	prvMoveToRelativePosition(INT16_MAX);
 
-#if CALIBRATE_MAX_PPS
+#if CALIBRATE_MAX_PPS == 1
 	BaseType_t toggle = -1;
 	xEventGroupSetBits(xPlotterFlagGroup, CalibratingPPS);
 	while (xEventGroupGetBits(xPlotterFlagGroup) & CalibratingPPS) {
-		xTargetPPS += kPPSDelta;
+		xMaximumPPS += kPPSDelta;
 		prvMoveToRelativePosition(xPlotterWidth * toggle);
 		toggle = 0 - toggle;
 
-		if (xRemainingJourneyLength == 0 && !ioOriginPin->read() && !ioLimitPin->read())
-			xEventGroupClearBits(xPlotterFlagGroup, CalibratingPPS | PositionFound);
+		if (xRemainingJourneyLength == 0 && !ioXOriginPin->read() && !ioXLimitPin->read())
+			xEventGroupClearBits(xPlotterFlagGroup, CalibratingPPS);
 	}
 
 	// Reset default PPS. Rework this to be less bad at some point!
-	xMaximumPPS = xTargetPPS - kPPSDelta;
-	xTargetPPS = kInitialPPS;
+	xMaximumPPS -= kPPSDelta;
 
 	prvPrintStats();
 
 	// We've lost our position so we need to find it again.
+	xEventGroupClearBits(xPlotterFlagGroup, PositionFound);
 	prvMoveToRelativePosition(INT16_MIN);
 #endif
 	// Return to centre
+	prvToggleDirection();
 	prvMoveToAbsolutePosition(xPlotterWidth / 2);
 }
 
@@ -155,7 +163,8 @@ static void prvOriginSwitchHandler(void* pvParameters) {
 	vTaskDelay(10);
 
 	static SemaphoreHandle_t xOriginAlertSemaphore = xSemaphoreCreateBinary();
-	ioOriginPin->setOnIRQCallback([](bool pressed) {
+	ioXOriginPin->setOnIRQCallback([](bool pressed) {
+		Board_LED_Set(0, pressed);
 		if (pressed) {
 			// We can't move any further, so terminate the move
 			prvTerminateMove();
@@ -178,10 +187,6 @@ static void prvOriginSwitchHandler(void* pvParameters) {
 		}
 
 		xOriginTimeStamp = xTaskGetTickCount();
-
-		Board_LED_Set(0, true);
-		vTaskDelay(configTICK_RATE_HZ / 2);
-		Board_LED_Set(0, false);
 	}
 }
 
@@ -189,7 +194,8 @@ static void prvLimitSwitchHandler(void* pvParameters) {
 	vTaskDelay(10);
 
 	static SemaphoreHandle_t xLimitAlertSemaphore = xSemaphoreCreateBinary();
-	ioLimitPin->setOnIRQCallback([](bool pressed) {
+	ioXLimitPin->setOnIRQCallback([](bool pressed) {
+		Board_LED_Set(1, pressed);
 		if (pressed) {
 			// We can't move any further, so terminate the move
 			prvTerminateMove();
@@ -205,7 +211,7 @@ static void prvLimitSwitchHandler(void* pvParameters) {
 		xSemaphoreTake(xLimitAlertSemaphore, portMAX_DELAY);
 		vStop();
 
-		auto const bits = xEventGroupGetBits(xPlotterFlagGroup) & (PositionFound | MaxWidthFound);
+		auto bits = xEventGroupGetBits(xPlotterFlagGroup) & (PositionFound | MaxWidthFound);
 		if (bits == PositionFound) {
 			xEventGroupSetBits(xPlotterFlagGroup, MaxWidthFound);
 			xPlotterWidth = xCurrentPosition.load();
@@ -215,17 +221,13 @@ static void prvLimitSwitchHandler(void* pvParameters) {
 		}
 
 		xLimitTimeStamp = xTaskGetTickCount();
-
-		Board_LED_Set(1, true);
-		vTaskDelay(configTICK_RATE_HZ / 2);
-		Board_LED_Set(1, false);
 	}
 }
 
 static void prvPlotterTask(void* pvParameters) {
 	vTaskDelay(10);
 
-	while (ioOriginPin->read() && ioLimitPin->read()); // Can change this to an event at some point.
+	while (ioXOriginPin->read() && ioXLimitPin->read()); // Can change this to an event at some point.
 
 #if CALIBRATE_MAX_WIDTH
 	prvCalibratePlotter();
@@ -244,7 +246,7 @@ static void prvPlotterTask(void* pvParameters) {
 			break;
 
 		case Message::SetPPS:
-			xTargetPPS = message.value;
+			xMaximumPPS = message.value;
 			break;
 		}
 	}
@@ -258,7 +260,7 @@ void vResume() {
 	xEventGroupSetBits(xPlotterFlagGroup, Flag::Go);
 }
 void vStop() {
-	xEventGroupClearBits(xPlotterFlagGroup, Flag::Go);
+	 //////////////////////xEventGroupClearBits(xPlotterFlagGroup, Flag::Go);
 }
 
 BaseType_t xGetPlotterWidth() {
@@ -266,12 +268,12 @@ BaseType_t xGetPlotterWidth() {
 	return xPlotterWidth;
 }
 
-void vOnTick() noexcept {
-	static DigitalIOPin xStepPin{ stepPinMap, false, false, false };
+void vOnXStep() noexcept {
+	static DigitalIOPin ioXStepPin{ pinmapXStep, false, false, false };
 
-	xStepPin.write(false);
+	ioXStepPin.write(false);
 
-	switch (prvGetDirection()) {
+	switch(prvGetDirection()) {
 	case Clockwise:
 		--xCurrentPosition;
 		break;
@@ -284,11 +286,36 @@ void vOnTick() noexcept {
 	if (--xRemainingJourneyLength == 0) {
 		prvTerminateMove();
 	} else if (xRemainingJourneyLength >= xJourneyLength * 0.90f)
-		prvStartPulsing(xCurrentPPS += fLinearPPSAccel);
+		prvStartPulsingX(xCurrentPPS += fLinearPPSAccel);
 	else if (xRemainingJourneyLength <= xJourneyLength * 0.10f)
-		prvStartPulsing(xCurrentPPS -= fLinearPPSAccel);
+		prvStartPulsingX(xCurrentPPS -= fLinearPPSAccel);
 
-	xStepPin.write(true); // Takes > 300 CPU cycles to handle this function, so that's a long enough delay for the stepper with our rinky-dink MCU!
+	ioXStepPin.write(true); // Takes > 300 CPU cycles to handle this function, so that's a long enough delay for the stepper with our rinky-dink MCU!
+}
+
+void vOnYStep() noexcept {
+	static DigitalIOPin ioYStepPin{ pinmapYStep, false, false, false };
+
+	ioYStepPin.write(false);
+
+	switch(prvGetDirection()) {
+	case Clockwise:
+		--xCurrentPosition;
+		break;
+
+	case CounterClockwise:
+		++xCurrentPosition;
+		break;
+	}
+
+	if (--xRemainingJourneyLength == 0) {
+		prvTerminateMove();
+	} else if (xRemainingJourneyLength >= xJourneyLength * 0.90f)
+		prvStartPulsingX(xCurrentPPS += fLinearPPSAccel);
+	else if (xRemainingJourneyLength <= xJourneyLength * 0.10f)
+		prvStartPulsingX(xCurrentPPS -= fLinearPPSAccel);
+
+	ioYStepPin.write(true); // Takes > 300 CPU cycles to handle this function, so that's a long enough delay for the stepper with our rinky-dink MCU!
 }
 
 BaseType_t xEnqueueMessage(Message::Command command, BaseType_t value) {
@@ -307,15 +334,19 @@ void vInit(void (*startPulsing)(BaseType_t xPulsesPerSecond), void (*stopPulsing
 
 	if (!(xEventGroupGetBits(xPlotterFlagGroup) & Initialised)) {
 		ITM_init();
-		prvStartPulsing = startPulsing;
-		prvStopPulsing = stopPulsing;
+		prvStartPulsingX = startPulsing;
+		prvStopPulsingX = stopPulsing;
 
 		xMoveComplete = xSemaphoreCreateBinary();
 		xMessages = new QueueWrapper<Message, 7>;
 
-		ioDirPin = new DigitalIOPin{ dirPinMap, false, false, false };
-		ioOriginPin = new DigitalIOPin{ LSw1PinMap, true, true, true, PIN_INT0_IRQn };
-		ioLimitPin = new DigitalIOPin{ LSw2PinMap, true, true, true, PIN_INT1_IRQn };
+		ioXDirPin = new DigitalIOPin{ pinmapXDir, false, false, false };
+		ioXOriginPin = new DigitalIOPin{ pinmapXOrigin, true, true, true, PIN_INT0_IRQn };
+		ioXLimitPin = new DigitalIOPin{ pinmapXLimit, true, true, true, PIN_INT1_IRQn };
+
+		ioYDirPin = new DigitalIOPin{ pinmapYDir, false, false, false };
+		ioYOriginPin = new DigitalIOPin{ pinmapYOrigin, true, true, true, PIN_INT2_IRQn };
+		ioYLimitPin = new DigitalIOPin{ pinmapYLimit, true, true, true, PIN_INT3_IRQn };
 
 		xTaskCreate(prvOriginSwitchHandler, "OriginSWHandler", configMINIMAL_STACK_SIZE, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 		xTaskCreate(prvLimitSwitchHandler, "LimitSWHandler", configMINIMAL_STACK_SIZE, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
@@ -325,5 +356,3 @@ void vInit(void (*startPulsing)(BaseType_t xPulsesPerSecond), void (*stopPulsing
 	}
 }
 }
-
-

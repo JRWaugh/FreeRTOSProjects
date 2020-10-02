@@ -43,9 +43,11 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/inc}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/include}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/portable/GCC/ARM_CM3}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/lpc_chip_15xx/inc/usbd}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/src}&quot;"/>
 								</option>
 								<option id="com.crt.advproject.cpp.misc.dialect.2064740887" name="Language standard" superClass="com.crt.advproject.cpp.misc.dialect" useByScannerDiscovery="true" value="com.crt.advproject.misc.dialect.cpp17" valueType="enumerated"/>
-								<option id="com.crt.advproject.cpp.exe.debug.option.optimization.level.803427120" name="Optimization Level" superClass="com.crt.advproject.cpp.exe.debug.option.optimization.level" useByScannerDiscovery="true" value="gnu.cpp.compiler.optimization.level.most" valueType="enumerated"/>
+								<option id="com.crt.advproject.cpp.exe.debug.option.optimization.level.803427120" name="Optimization Level" superClass="com.crt.advproject.cpp.exe.debug.option.optimization.level" useByScannerDiscovery="true" value="gnu.cpp.compiler.optimization.level.none" valueType="enumerated"/>
 								<inputType id="com.crt.advproject.compiler.cpp.input.142039015" superClass="com.crt.advproject.compiler.cpp.input"/>
 							</tool>
 							<tool id="com.crt.advproject.gcc.exe.debug.1929005540" name="MCU C Compiler" superClass="com.crt.advproject.gcc.exe.debug">
@@ -70,6 +72,8 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/inc}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/include}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/portable/GCC/ARM_CM3}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/lpc_chip_15xx/inc/usbd}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/src}&quot;"/>
 								</option>
 								<option id="com.crt.advproject.c.misc.dialect.936357463" name="Language standard" superClass="com.crt.advproject.c.misc.dialect" useByScannerDiscovery="true" value="com.crt.advproject.misc.dialect.c17" valueType="enumerated"/>
 								<inputType id="com.crt.advproject.compiler.input.1880397152" superClass="com.crt.advproject.compiler.input"/>
@@ -133,7 +137,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
+						<entry excluding="Lab7.cpp|Lab6.cpp|Lab8.cpp|plotter_main.cpp" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -180,6 +184,7 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/inc}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/include}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/portable/GCC/ARM_CM3}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;../ /lpc_chip_15xx/inc/usbd&quot;"/>
 								</option>
 								<option id="com.crt.advproject.cpp.misc.dialect.1693312783" name="Language standard" superClass="com.crt.advproject.cpp.misc.dialect" useByScannerDiscovery="true" value="com.crt.advproject.misc.dialect.c++1z" valueType="enumerated"/>
 								<inputType id="com.crt.advproject.compiler.cpp.input.160457906" superClass="com.crt.advproject.compiler.cpp.input"/>
@@ -206,6 +211,7 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/inc}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/include}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/portable/GCC/ARM_CM3}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;../ /lpc_chip_15xx/inc/usbd&quot;"/>
 								</option>
 								<option id="com.crt.advproject.c.misc.dialect.1687792338" name="Language standard" superClass="com.crt.advproject.c.misc.dialect" useByScannerDiscovery="true" value="com.crt.advproject.misc.dialect.c11" valueType="enumerated"/>
 								<inputType id="com.crt.advproject.compiler.input.1572831345" superClass="com.crt.advproject.compiler.input"/>
@@ -222,6 +228,7 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/inc}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/include}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/FreeRTOS/src/portable/GCC/ARM_CM3}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;../ /lpc_chip_15xx/inc/usbd&quot;"/>
 								</option>
 								<inputType id="cdt.managedbuild.tool.gnu.assembler.input.1894332665" superClass="cdt.managedbuild.tool.gnu.assembler.input"/>
 								<inputType id="com.crt.advproject.assembler.input.2084855209" name="Additional Assembly Source Files" superClass="com.crt.advproject.assembler.input"/>
@@ -266,7 +273,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
+						<entry excluding="Lab7.cpp|Lab6.cpp|Lab8.cpp|plotter_main.cpp" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -275,9 +282,6 @@
 	</storageModule>
 	<storageModule moduleId="cdtBuildSystem" version="4.0.0">
 		<project id="ARM2020.com.crt.advproject.projecttype.exe.910409914" name="Executable" projectType="com.crt.advproject.projecttype.exe"/>
-	</storageModule>
-	<storageModule moduleId="scannerConfiguration">
-		<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId=""/>
 	</storageModule>
 	<storageModule moduleId="org.eclipse.cdt.core.LanguageSettingsProviders"/>
 	<storageModule moduleId="com.crt.config">
@@ -311,5 +315,33 @@
 		<boardId>LPCXpresso1549</boardId>
 	</storageModule>
 	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
-	<storageModule moduleId="refreshScope"/>
+	<storageModule moduleId="refreshScope" versionNumber="2">
+		<configuration configurationName="Debug">
+			<resource resourceType="PROJECT" workspacePath="/ARM2020"/>
+		</configuration>
+		<configuration configurationName="Release">
+			<resource resourceType="PROJECT" workspacePath="/ARM2020"/>
+		</configuration>
+	</storageModule>
+	<storageModule moduleId="scannerConfiguration">
+		<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId=""/>
+		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.debug.1325146531;com.crt.advproject.config.exe.debug.1325146531.;com.crt.advproject.gas.exe.debug.702387717;com.crt.advproject.assembler.input.573158702">
+			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfile"/>
+		</scannerConfigBuildInfo>
+		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.release.362897165;com.crt.advproject.config.exe.release.362897165.;com.crt.advproject.cpp.exe.release.591666836;com.crt.advproject.compiler.cpp.input.160457906">
+			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfileCPP"/>
+		</scannerConfigBuildInfo>
+		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.debug.1325146531;com.crt.advproject.config.exe.debug.1325146531.;com.crt.advproject.gcc.exe.debug.1929005540;com.crt.advproject.compiler.input.1880397152">
+			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfile"/>
+		</scannerConfigBuildInfo>
+		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.release.362897165;com.crt.advproject.config.exe.release.362897165.;com.crt.advproject.gcc.exe.release.1012432503;com.crt.advproject.compiler.input.1572831345">
+			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfile"/>
+		</scannerConfigBuildInfo>
+		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.release.362897165;com.crt.advproject.config.exe.release.362897165.;com.crt.advproject.gas.exe.release.2034545226;com.crt.advproject.assembler.input.2084855209">
+			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfile"/>
+		</scannerConfigBuildInfo>
+		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.debug.1325146531;com.crt.advproject.config.exe.debug.1325146531.;com.crt.advproject.cpp.exe.debug.1684162521;com.crt.advproject.compiler.cpp.input.142039015">
+			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfileCPP"/>
+		</scannerConfigBuildInfo>
+	</storageModule>
 </cproject>

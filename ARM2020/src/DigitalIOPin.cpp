@@ -10,67 +10,51 @@ static DigitalIOPin* io[8]{ nullptr };
 
 extern "C" {
 void PIN_INT0_IRQHandler() {
-	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(0));
 	if (io[0])
 		io[0]->isr();
-	portEND_SWITCHING_ISR(xHigherPriorityWoken);
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(0));
 }
 
 void PIN_INT1_IRQHandler() {
-	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(1));
 	if (io[1])
 		io[1]->isr();
-	portEND_SWITCHING_ISR(xHigherPriorityWoken);
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(1));
 }
 
 void PIN_INT2_IRQHandler() {
-	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(2));
 	if (io[2])
 		io[2]->isr();
-	portEND_SWITCHING_ISR(xHigherPriorityWoken);
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(2));
 }
 
 void PIN_INT3_IRQHandler() {
-	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(3));
 	if (io[3])
 		io[3]->isr();
-	portEND_SWITCHING_ISR(xHigherPriorityWoken);
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(3));
 }
 
 void PIN_INT4_IRQHandler() {
-	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(4));
 	if (io[4])
 		io[4]->isr();
-	portEND_SWITCHING_ISR(xHigherPriorityWoken);
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(4));
 }
 
 void PIN_INT5_IRQHandler() {
-	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(5));
 	if (io[5])
 		io[5]->isr();
-	portEND_SWITCHING_ISR(xHigherPriorityWoken);
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(5));
 }
 
 void PIN_INT6_IRQHandler() {
-	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(6));
 	if (io[6])
 		io[6]->isr();
-	portEND_SWITCHING_ISR(xHigherPriorityWoken);
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(6));
 }
 
 void PIN_INT7_IRQHandler() {
-	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(7));
 	if (io[7])
 		io[7]->isr();
-	portEND_SWITCHING_ISR(xHigherPriorityWoken);
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(7));
 }
 }
 
@@ -85,6 +69,7 @@ DigitalIOPin::DigitalIOPin(LPCPinMap pin_map, bool input, bool pullup, bool inve
 			Chip_PININT_Init(LPC_GPIO_PIN_INT);
 			isInit = true;
 		}
+
 		io[channel] = this;
 		Chip_INMUX_PinIntSel(channel, pin_map.port, pin_map.pin);
 		Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(channel));

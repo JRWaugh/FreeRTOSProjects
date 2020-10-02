@@ -14,6 +14,7 @@ extern "C" {
 
 void ITM_init(void);
 int ITM_write(const char *pcBuffer);
+int ITM_print(char const * format, ...);
 
 #ifdef __cplusplus
 }

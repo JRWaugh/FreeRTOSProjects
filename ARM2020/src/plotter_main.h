@@ -25,7 +25,7 @@ enum Flag {
 
 void vResume();
 void vStop();
-void vOnTick();
+void vOnXStep();
 BaseType_t xGetPlotterWidth();
 BaseType_t xEnqueueMessage(Message const & message);
 BaseType_t xEnqueueMessage(Message::Command command, BaseType_t value);

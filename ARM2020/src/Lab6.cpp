@@ -58,7 +58,7 @@ void RIT_IRQHandler(void) {
 void SCT2_IRQHandler(void) {
 	if (LPC_SCT2->EVFLAG & SCT_EVT_0) {
 		Chip_SCT_ClearEventFlag(LPC_SCT2, SCT_EVT_0);
-		Plotter::vOnTick();
+		Stepper::getXStepper().step();
 	}
 }
 #endif
@@ -79,7 +79,7 @@ int main(void) {
 				uart.write("\r\n");
 				*iter = '\0';
 				iter = std::begin(buffer);
-
+#if 0
 				if (char* res = strstr(buffer, "go"); res != nullptr) {
 					Plotter::vResume();
 				} else if (res = strstr(buffer, "stop"); res != nullptr) {
@@ -97,6 +97,7 @@ int main(void) {
 						if (Plotter::xEnqueueMessage(Plotter::Message::SetPPS, value) == errQUEUE_FULL)
 							uart.write("Command queue full!\r\n");
 				}
+#endif
 			} else {
 				uart.write(*iter);
 

@@ -67,10 +67,15 @@
 #define configCHECK_FOR_STACK_OVERFLOW	2
 #define configUSE_RECURSIVE_MUTEXES		1
 #define configQUEUE_REGISTRY_SIZE		10
-#define configGENERATE_RUN_TIME_STATS	0
+#define configGENERATE_RUN_TIME_STATS	1
 #define configUSE_MALLOC_FAILED_HOOK	1
     
-#define configUSE_TIMERS                0
+/* Software timer related definitions. */
+#define configUSE_TIMERS                        1
+#define configTIMER_TASK_PRIORITY               tskIDLE_PRIORITY + 2UL
+#define configTIMER_QUEUE_LENGTH                10
+#define configTIMER_TASK_STACK_DEPTH            configMINIMAL_STACK_SIZE
+
 #define configUSE_NEWLIB_REENTRANT      1
 
 #define configINCLUDE_FREERTOS_TASK_C_ADDITIONS_H 1
@@ -96,7 +101,7 @@ to exclude the API function. */
  * - Extremely accurate timing using CPU core for short time statistics
  * - Slightly less accurate timing using LPC timers for collecting stats over extended time periods
  */
-#if 1
+#if 0
 /* This enables processor core cycle counter for runtime statistics
  * Internal cycle counter gives very accurate results but overflows in couple of minutes */
 #define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS()    (CoreDebug->DEMCR |= 1 << 24, DWT->CTRL |= 1)

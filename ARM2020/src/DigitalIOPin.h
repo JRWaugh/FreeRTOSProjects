@@ -9,7 +9,6 @@
 #define DIGITALIOPIN_H_
 
 #include "board.h"
-#include "FreeRTOS.h"
 #include "LPCPinMap.h"
 
 class DigitalIOPin {
@@ -34,6 +33,7 @@ private:
 	onIRQCallback callback;
 
 	static bool isInit;
+	static constexpr size_t kDebounceTime{ 72 * 100000 };
 	static constexpr IRQn_Type kNoIRQ	{ static_cast<IRQn_Type>(0) };
 	static constexpr IRQn_Type kIRQnMin { PIN_INT0_IRQn };
 	static constexpr IRQn_Type kIRQnMax { PIN_INT7_IRQn };

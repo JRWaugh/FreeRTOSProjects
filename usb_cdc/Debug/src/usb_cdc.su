@@ -1,0 +1,17 @@
+gthr-default.h:229:1:int __gthread_key_delete(__gthread_key_t)	16	static
+usb_cdc.cpp:18:6:void vConfigureTimerForRunTimeStats()	8	static
+usb_cdc.cpp:26:13:void prvSetupHardware()	8	static
+usb_cdc.cpp:84:13:void USBSend(const char*)	16	static
+usb_cdc.cpp:88:13:void usb_sender(SemaphoreHandle_t)	168	static
+usb_cdc.cpp:136:13:void usb_replyer(SemaphoreHandle_t)	48	static
+circularbuffer.h:25:12:constexpr circularbuffer<T, N>::circularbuffer() [with T = char; unsigned int N = 4]	16	static
+usb_cdc.cpp:151:13:void command_reader(FreeRTOS::UART*)	240	static
+usb_cdc.cpp:179:5:int main()	56	static
+array:175:7:constexpr std::array<_Tp, _Nm>::size_type std::array<_Tp, _Nm>::size() const [with _Tp = const char*; unsigned int _Nm = 5]	16	static
+array:189:7:constexpr const value_type& std::array<_Tp, _Nm>::operator[](std::array<_Tp, _Nm>::size_type) const [with _Tp = const char*; unsigned int _Nm = 5]	16	static
+circularbuffer.h:30:25:constexpr unsigned int circularbuffer<T, N>::size() const [with T = char; unsigned int N = 4]	16	static
+circularbuffer.h:33:5:T& circularbuffer<T, N>::operator[](unsigned int) [with T = char; unsigned int N = 4]	16	static
+circularbuffer.h:45:7:void circularbuffer<T, N>::push_back(T) [with T = char; unsigned int N = 4]	24	static
+usb_cdc.cpp:74:6:void xTaskCreateWithBind(F&&, T, const char*, uint16_t, UBaseType_t, tskTaskControlBlock**) [with F = void (&)(QueueDefinition*); T = QueueDefinition*]	32	static
+usb_cdc.cpp:74:6:void xTaskCreateWithBind(F&&, T, const char*, uint16_t, UBaseType_t, tskTaskControlBlock**) [with F = void (&)(FreeRTOS::UART*); T = FreeRTOS::UART*]	32	static
+array:55:7:static constexpr _Tp& std::__array_traits<_Tp, _Nm>::_S_ref(const _Tp (&)[_Nm], std::size_t) [with _Tp = const char*; unsigned int _Nm = 5]	16	static
