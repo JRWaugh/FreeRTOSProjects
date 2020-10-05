@@ -70,6 +70,8 @@ DigitalIOPin::DigitalIOPin(LPCPinMap pin_map, bool input, bool pullup, bool inve
 			isInit = true;
 		}
 
+		xSemaphore = xSemaphoreCreateBinary();
+
 		io[channel] = this;
 		Chip_INMUX_PinIntSel(channel, pin_map.port, pin_map.pin);
 		Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(channel));
@@ -96,6 +98,21 @@ bool DigitalIOPin::read() const {
 	return static_cast<bool>(LPC_GPIO->B[pin_map.port][pin_map.pin]);
 }
 
+
+BaseType_t DigitalIOPin::read(bool const value, TickType_t xBlockTime) {
+	TickType_t const xStartTicks = xTaskGetTickCount();
+	if (xSemaphoreTake(xSemaphore, xBlockTime) == pdTRUE) {
+		if (read() == value)
+			return pdTRUE;
+		else {
+			xBlockTime = (xBlockTime == portMAX_DELAY) ? portMAX_DELAY : xBlockTime - (xTaskGetTickCount() - xStartTicks);
+			return read(value, xBlockTime);
+		}
+	} else {
+		return pdFALSE;
+	}
+}
+
 void DigitalIOPin::write(bool const value) {
 	LPC_GPIO->B[pin_map.port][pin_map.pin] = invert ? !value : value;
 }
@@ -113,6 +130,12 @@ void DigitalIOPin::setOnIRQCallback(onIRQCallback callback) {
 void DigitalIOPin::isr() {
 	if (callback != nullptr)
 		callback(read());
+
+	if (xSemaphore != nullptr) {
+		portBASE_TYPE xHigherPriorityWoken = pdFALSE;
+		xSemaphoreGiveFromISR(xSemaphore, &xHigherPriorityWoken);
+		portEND_SWITCHING_ISR(xHigherPriorityWoken);
+	}
 }
 
 bool DigitalIOPin::isInit{ false };

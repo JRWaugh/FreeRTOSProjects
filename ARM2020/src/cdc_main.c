@@ -38,7 +38,7 @@
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "semphr.h"
-
+#include "event_groups.h"
 #include "ITM_write.h"
 #include "user_vcom.h"
 
@@ -64,6 +64,7 @@ static SemaphoreHandle_t SendComplete;
 static QueueHandle_t SendQueue;
 static QueueHandle_t AllocQueue;
 static QueueHandle_t ReceiveQueue;
+static EventGroupHandle_t EventGroup;
 
 /*****************************************************************************
  * Private functions
@@ -74,6 +75,8 @@ static QueueHandle_t ReceiveQueue;
  ****************************************************************************/
 
 void USB_send(uint8_t *data, uint32_t length) {
+	while (EventGroup == NULL);
+	xEventGroupWaitBits(EventGroup, 1 << 0, pdFALSE, pdTRUE, portMAX_DELAY);
 	SendItem send = { data, length };
 	xSemaphoreTake(SendMutex, portMAX_DELAY); // take mutex
 	xQueueSend(SendQueue, &send, portMAX_DELAY); // send data to queue
@@ -83,8 +86,10 @@ void USB_send(uint8_t *data, uint32_t length) {
 }
 
 uint32_t USB_receive(uint8_t *data, uint32_t length) {
-	SendItem rec;
+	while (EventGroup == NULL);
+	xEventGroupWaitBits(EventGroup, 1 << 0, pdFALSE, pdTRUE, portMAX_DELAY);
 
+	SendItem rec;
 	xQueueReceive(ReceiveQueue, &rec, portMAX_DELAY);
 	uint32_t len = rec.dlen > length ? length : rec.dlen; /* copy data to user */
 	memcpy(data, rec.dptr, len);
@@ -143,6 +148,7 @@ void cdc_task(void *pvParameters) {
 	uint32_t rdCnt = 0;
 	SendItem snd = { NULL, 0 };
 	SendItem rcv = { NULL, 0 };
+	EventGroup = xEventGroupCreate();
 
 	/* create semaphores, queues and mutexes */
 	xCDCEventSemaphore = xSemaphoreCreateBinary();
@@ -226,6 +232,7 @@ void cdc_task(void *pvParameters) {
 
 	ITM_write("Connected\r\n");
 
+	xEventGroupSetBits(EventGroup, 1 << 0);
 
 	while (1) {
 		/* try allocate receive buffer if we have none */

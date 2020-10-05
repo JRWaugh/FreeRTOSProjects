@@ -9,6 +9,8 @@
 #define DIGITALIOPIN_H_
 
 #include "board.h"
+#include "FreeRTOS.h"
+#include "semphr.h"
 #include "LPCPinMap.h"
 
 class DigitalIOPin {
@@ -19,6 +21,7 @@ public:
 	~DigitalIOPin();
 
 	bool read() const;
+	BaseType_t read(bool const value, TickType_t xBlockTime);
 	void write(bool const value);
 	bool toggle();
 
@@ -31,6 +34,7 @@ private:
 	bool const invert;
 	IRQn_Type IRQn;
 	onIRQCallback callback;
+	SemaphoreHandle_t xSemaphore{ nullptr };
 
 	static bool isInit;
 	static constexpr size_t kDebounceTime{ 72 * 100000 };

@@ -16,7 +16,7 @@
 #include "ITM_write.h"
 
 #define EX1 0
-#define EX2 0
+#define EX2 1
 #define EX3 1
 
 static constexpr size_t kTicksPerSecond{ 1'000'000 };

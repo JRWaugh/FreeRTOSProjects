@@ -9,24 +9,51 @@
 #include "FreeRTOS.h"
 #include "heap_lock_monitor.h"
 #include "Axis.h"
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include "ITM_write.h"
+#include "user_vcom.h"
 
-static constexpr size_t kTicksPerSecond{ 1'000'000 };
+static constexpr size_t kTicksPerSecond{ 1'000'000 }, kFrequency{ 50 }, kPeriod{ kTicksPerSecond / kFrequency - 1 };
+constexpr static auto MalformedCode = "Malformed code\r\n", UnknownCode = "Unknown code\r\n", NotAGCode = "Not a GCode\r\n";
+constexpr static auto OK = "OK\r\n";
 static LPCPinMap constexpr pinmapXStep{ 0, 24 }, pinmapXDir{ 1,   0 }, pinmapXOrigin{ 0,  9 }, pinmapXLimit{ 0, 29 };
-static LPCPinMap constexpr pinmapYStep{ 0, 27 }, pinmapYDir{ 0,  28 }, pinmapYOrigin{ 1,  3 }, pinmapYLimit{ 0,  0 };
+static LPCPinMap constexpr pinmapYStep{ 0, 27 }, pinmapYDir{ 0,  28 }, pinmapYOrigin{ 0,  0 }, pinmapYLimit{ 1,  3 };
+static size_t width{ 150 }, height{ 100 };
 static Axis* X, * Y;
+
+static void prvSetLaserPower(uint8_t laserPower) {
+	LPC_SCT2->EVENT[4].STATE = LPC_SCT2->EVENT[5].STATE = 0x1;
+	LPC_SCT2->EVENT[4].CTRL = 1 << 3 | 1 << 12;
+	LPC_SCT2->EVENT[5].CTRL = 1 << 4 | 1 << 12;
+	LPC_SCT2->MATCHREL[4].U = kPeriod;
+	LPC_SCT2->MATCHREL[5].U = kPeriod * laserPower / 255;
+}
+
+static void prvSetPenPosition(uint8_t penPosition) {
+	LPC_SCT2->EVENT[2].STATE = LPC_SCT2->EVENT[3].STATE = 0x1;
+	LPC_SCT2->EVENT[2].CTRL = 1 << 1 | 1 << 12;
+	LPC_SCT2->EVENT[3].CTRL = 1 << 2 | 1 << 12;
+	LPC_SCT2->MATCHREL[2].U = kPeriod;
+	LPC_SCT2->MATCHREL[3].U = kPeriod * penPosition / 255;
+}
 
 static void prvSetupHardware() {
 	SystemCoreClockUpdate();
 	Board_Init();
 	heap_monitor_setup();
+	ITM_init();
 	auto const prescale = SystemCoreClock / kTicksPerSecond - 1;
 	Chip_SCTPWM_Init(LPC_SCT2);
 	LPC_SCT2->CONFIG = SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L;
 	LPC_SCT2->CTRL_U = SCT_CTRL_PRE_L(prescale) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
-	LPC_SCT2->EVENT[0].STATE = LPC_SCT2->EVENT[1].STATE = 1 << 0;
 	LPC_SCT2->EVENT[0].CTRL = 0 << 0 | 1 << 12;
 	LPC_SCT2->EVENT[1].CTRL = 1 << 0 | 1 << 12;
+	prvSetPenPosition(160);
+	prvSetLaserPower(0);
 	LPC_SCT2->RES = 0xF;
+	LPC_SCT2->EVEN = SCT_EVT_0 | SCT_EVT_1;
 	LPC_SCT2->CTRL_L &= ~(1 << 2);
 	NVIC_SetPriority(SCT2_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY + 1);
 	NVIC_EnableIRQ(SCT2_IRQn);
@@ -40,151 +67,180 @@ void vConfigureTimerForRunTimeStats() {
 }
 
 void SCT2_IRQHandler(void) {
-	/* Note: I'm not disabling the timer at any point, instead I'm disabling different events causing an interrupt.
-	 * For that reason, I have to check if a bit is set in EVEN as well as whether an EVFLAG bit been set because of a timer match.
-	 */
-	if (LPC_SCT2->EVEN & LPC_SCT2->EVFLAG & SCT_EVT_0 && X != nullptr)
+	if (LPC_SCT2->EVFLAG & SCT_EVT_0 && X != nullptr) {
+		LPC_SCT2->EVFLAG = SCT_EVT_0;
 		X->step();
+	}
 
-	if (LPC_SCT2->EVEN & LPC_SCT2->EVFLAG & SCT_EVT_1 && Y != nullptr)
+	if (LPC_SCT2->EVFLAG & SCT_EVT_1 && Y != nullptr) {
+		LPC_SCT2->EVFLAG = SCT_EVT_1;
 		Y->step();
-
-	LPC_SCT2->EVFLAG = SCT_EVT_0 | SCT_EVT_1;
+	}
 }
 }
 
 int main(void) {
 	prvSetupHardware();
 
-	X = new Axis {
+	X = new Axis{
+		width,
 		{ pinmapXStep, false, false, false },
 		{ pinmapXDir, false, false, false },
 		{ pinmapXOrigin, true, true, true },
 		{ pinmapXLimit, true, true, true },
 		[](uint32_t stepsPerSecond) {
 			LPC_SCT2->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
-			Chip_SCT_ClearEventFlag(LPC_SCT2, SCT_EVT_0);
-			Chip_SCT_EnableEventInt(LPC_SCT2, SCT_EVT_0);
+			LPC_SCT2->EVENT[0].STATE = 1;
 		},
 		[]() {
-			Chip_SCT_DisableEventInt(LPC_SCT2, SCT_EVT_0);
+			LPC_SCT2->EVENT[0].STATE = 0;
 		}
 	};
 
-	Y = new Axis {
+	Y = new Axis{
+		height,
 		{ pinmapYStep, false, false, false },
 		{ pinmapYDir, false, false, false },
 		{ pinmapYOrigin, true, true, true },
 		{ pinmapYLimit, true, true, true },
 		[](uint32_t stepsPerSecond) {
 			LPC_SCT2->MATCHREL[1].U = kTicksPerSecond / stepsPerSecond - 1;
-			Chip_SCT_ClearEventFlag(LPC_SCT2, SCT_EVT_1);
-			Chip_SCT_EnableEventInt(LPC_SCT2, SCT_EVT_1);
+			LPC_SCT2->EVENT[1].STATE = 1;
 		},
 		[]() {
-			Chip_SCT_DisableEventInt(LPC_SCT2, SCT_EVT_1);
+			LPC_SCT2->EVENT[1].STATE = 0;
 		}
 	};
 
-	X->enqueueMove({ Move::Relative, -2000 });
-	Y->enqueueMove({ Move::Relative, -2000 });
+	xTaskCreate([](void* pvParameters){
+		constexpr static Axis::Direction kTowardsOrigin{ Axis::Direction::Clockwise };
+		uint8_t penUp{ 160 }, penDown{ 90 }, speed{ 80 };
 
-#if 0
-	xTaskCreate([](){
-		char g_code[256]{ 0 };
+		char buffer[RCV_BUFSIZE + 1];
+
 		while (true) {
-			switch (g_code[0]) {
+			USB_receive((uint8_t *) buffer, RCV_BUFSIZE);
+			ITM_write(buffer);
+
+			auto const letter = buffer[0];
+			auto const number = std::atoi(buffer + 1);
+
+			switch (letter) {
 			case 'G': {
-				switch (std::atoi(g_code + 1)) {
+				switch (number) {
 				case 1: {
 					float x{ 0 }, y{ 0 };
-					uint8_t relative{ 0 };
+					bool relative{ 0 };
 
-					if (std::sscanf(g_code + 3, "X%f Y%f A%c", &x, &y, &relative) == 3)
-						plotter->onG1Received(x, y, relative);
+					if (std::sscanf(buffer + 3, "X%f Y%f A%hhu", &x, &y, &relative) == 3) {
+						if (relative) {
+							if (std::abs(x) < std::abs(y)) {
+								X->enqueueMove({ (bool) relative, x, std::abs(x) * 1000 / std::abs(y) });
+								Y->enqueueMove({ (bool) relative, y, 1000 });
+							} else {
+								X->enqueueMove({ (bool) relative, x, 1000 });
+								Y->enqueueMove({ (bool) relative, y, std::abs(y) * 1000 / std::abs(x) });
+							}
+						} else {
+							X->enqueueMove({ (bool) relative, x, 1000 });
+							Y->enqueueMove({ (bool) relative, y, 1000 });
+						}
+					}
 					else
-						plotter->onError(kMalformedCode);
+						ITM_write(MalformedCode);
 					break;
 				}
 
 				case 28:
-					plotter->onG28Received();
+					X->enqueueMove({ Move::Absolute, 0 });
+					Y->enqueueMove({ Move::Absolute, 0 });
 					break;
 
 				default:
-					plotter->onError(kUnknownCode);
+					ITM_write(UnknownCode);
 					break;
 				}
 				break;
 			}
 
 			case 'M': {
-				switch (std::atoi(g_code + 1)) {
+				switch (number) {
 				case 1: {
-					uint8_t pen_position{ 0 };
+					uint8_t penPosition{ 0 };
 
-					if (std::sscanf(g_code + 3, "%c", &pen_position) == 1)
-						plotter->onM1Received(pen_position);
+					if (std::sscanf(buffer + 3, "%c", &penPosition) == 1)
+						prvSetPenPosition(penPosition);
 					else
-						plotter->onError(kMalformedCode);
+						ITM_write(MalformedCode);
 					break;
 				}
 
 				case 2: {
-					uint8_t up{ 0 }, down{ 0 };
+					uint8_t tempUp{ 0 }, tempDown{ 0 };
 
-					if (std::sscanf(g_code + 3, "U%c D%c", &up, &down) == 2)
-						plotter->onM2Received(up, down);
+					if (std::sscanf(buffer + 3, "U%c D%c", &tempUp, &tempDown) == 2) {
+						penUp = tempUp;
+						penDown = tempDown;
+					}
 					else
-						plotter->onError(kMalformedCode);
+						ITM_write(MalformedCode);
 					break;
 				}
 
 				case 4: {
-					uint8_t laser_power{ 0 };
+					uint8_t laserPower{ 0 };
 
-					if (std::sscanf(g_code + 3, "%c", &laser_power) == 1)
-						plotter->onM4Received(laser_power);
+					if (std::sscanf(buffer + 3, "%c", &laserPower) == 1)
+						prvSetLaserPower(laserPower);
 					else
-						plotter->onError(kMalformedCode);
+						ITM_write(MalformedCode);
 
 					break;
 				}
 
 				case 5: {
-					uint8_t a_step{ 0 }, b_step{ 0 }, speed{ 0 };
-					uint32_t height{ 0 }, width{ 0 };
+					uint8_t tempXDir{ 0 }, tempYDir{ 0 }, tempSpeed{ 0 };
+					uint32_t tempHeight{ 0 }, tempWidth{ 0 };
 
-					if (std::sscanf(g_code + 3, "A%c B%c H%ld W%ld S%c", &a_step, &b_step, &height, &width, &speed) == 5)
-						plotter->onM5Received(a_step, b_step, height, width, speed);
+					if (std::sscanf(buffer + 3, "A%c B%c H%ld W%ld S%hhu", &tempXDir, &tempYDir, &tempHeight, &tempWidth, &tempSpeed) == 5) {
+#if WHOCARES
+						x_direction = static_cast<Axis::Direction>(tempXDir);
+						y_direction = static_cast<Axis::Direction>(tempYDir);
+						height = tempHeight;
+						width = tempWidth;
+						speed = tempSpeed;
+#endif
+					}
 					else
-						plotter->onError(kMalformedCode);
-
+						ITM_write(MalformedCode);
 					break;
 				}
 
 				case 10:
-					plotter->onM10Received();
+					sprintf(buffer, "M10 XY %d %d 0.00 0.00 A%d B%d S%d H0 U%d D%d\r\n", width, height, kTowardsOrigin, kTowardsOrigin, speed, penUp, penDown);
+					USB_send((uint8_t*) buffer, strlen(buffer));
 					break;
 
 				case 11:
-					plotter->onM11Received();
+					USB_send((uint8_t*) "M11 0 0 0 0\r\nOK\r\n", 17);
 					break;
 
 				default:
-					plotter->onError(kUnknownCode);
+					ITM_write(UnknownCode);
 					break;
 				}
 				break;
 			}
 
 			default:
-				plotter->onError(kNotAGCode);
+				ITM_write(NotAGCode);
 				break;
 			}
+			USB_send((uint8_t *) OK, sizeof(OK));
 		}
-	}, "Code Parser", configMINIMAL_STACK_SIZE + 256, nullptr, tskIDLE_PRIORITY + 1UL, nullptr)
-#endif
+	}, "Code Parser", configMINIMAL_STACK_SIZE + 512, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
+
+	xTaskCreate(cdc_task, "CDC", configMINIMAL_STACK_SIZE + 128, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 
 	vTaskStartScheduler();
 }
