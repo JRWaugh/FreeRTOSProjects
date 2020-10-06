@@ -12,20 +12,23 @@ Axis::Axis(	size_t xSize,
 		DigitalIOPin ioDirection,
 		DigitalIOPin ioOriginSW,
 		DigitalIOPin ioLimitSW,
-		void (*start)(uint32_t stepsPerSecond),
-		void (*stop)()
+		StepStarter_t start,
+		StepStopper_t stop
 ) : xSize{ xSize }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, start{ start }, stop{ stop } {
 	ioStep.write(true);
 	xTaskCreate(prvAxisTask, nullptr, configMINIMAL_STACK_SIZE, this, tskIDLE_PRIORITY + 1UL, nullptr);
 }
 
-void Axis::startMove(int32_t xStepsToMove, uint32_t xStepsPerSecond) noexcept {
+void Axis::startMove(int32_t xStepsToMove, float fStepsPerSecond, bool bIsRelative) {
+	if (!bIsRelative)
+		xStepsToMove -= currentPosition;
+
 	if (xStepsToMove == 0)
 		return;
 	else if (xStepsToMove > 0)
-		setDirection(CounterClockwise);
+		setDirection(kTowardsLimit);
 	else if (xStepsToMove < 0)
-		setDirection(Clockwise);
+		setDirection(kTowardsOrigin);
 
 	numberOfSteps = stepsRemaining = abs(xStepsToMove);
 
@@ -37,15 +40,15 @@ void Axis::startMove(int32_t xStepsToMove, uint32_t xStepsPerSecond) noexcept {
 		fLinearPPSAccel = 0;
 	stepsPerSecond = kInitialPPS;
 #endif
-	start(xStepsPerSecond);
+	start(fStepsPerSecond);
 
-	xSemaphoreTake(moveComplete, portMAX_DELAY);
+	xSemaphoreTake(xMoveComplete, portMAX_DELAY);
 }
 
 void Axis::endMove() {
 	stop();
 	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-	xSemaphoreGiveFromISR(moveComplete, &xHigherPriorityWoken);
+	xSemaphoreGiveFromISR(xMoveComplete, &xHigherPriorityWoken);
 	portEND_SWITCHING_ISR(xHigherPriorityWoken);
 }
 
@@ -55,7 +58,7 @@ void Axis::step() {
 	--stepsRemaining;
 	Direction direction = this->getDirection();
 
-	if (direction == Clockwise) {
+	if (direction == kTowardsOrigin) {
 		--currentPosition;
 		if (ioOriginSW.read()) {
 			if (maximumPosition == kPositionUnknown)
@@ -63,7 +66,7 @@ void Axis::step() {
 			endMove();
 		} else if (!stepsRemaining)
 			endMove();
-	} else if (direction == CounterClockwise) {
+	} else if (direction == kTowardsLimit) {
 		++currentPosition;
 
 		if (ioLimitSW.read()) {
@@ -83,19 +86,19 @@ void Axis::step() {
 #endif
 }
 
-bool Axis::obstructed() {
+bool Axis::obstructed() const noexcept {
 	return ioOriginSW.read() && ioLimitSW.read();
 }
 
 void Axis::enqueueMove(Move const & message) {
-	queue.push_back(message, portMAX_DELAY);
+	xMoveQueue.push_back(message, portMAX_DELAY);
 }
 
-Move Axis::dequeueMove() {
-	return queue.pop_front();
+[[nodiscard]] Axis::Move Axis::dequeueMove() {
+	return xMoveQueue.pop_front();
 }
 
-void Axis::calibrate() {
+float Axis::calibrateStepsPerMM() {
 	startMove(INT32_MIN);
 	startMove(INT32_MAX);
 #if ACCELERATING == 1
@@ -117,28 +120,16 @@ void Axis::calibrate() {
 	xEventGroupClearBits(xPlotterFlagGroup, PositionFound);
 	prvMoveToRelativePosition(INT16_MIN);
 #endif
-	startMove(0 - currentPosition);
+	startMove(0, kMaximumPPS, Move::Absolute);
 
-	fStepsPerMM = static_cast<float>(maximumPosition) / xSize;
+	return static_cast<float>(maximumPosition) / xSize;
 }
 
-[[nodiscard]] int32_t Axis::getMaxPosition() {
-	return maximumPosition;
-}
-
-[[nodiscard]] int32_t Axis::getCurrentPosition() {
-	return currentPosition;
-}
-
-[[nodiscard]] float Axis::getStepsPerMM() {
-	return fStepsPerMM;
-}
-
-void Axis::setDirection(Direction direction) noexcept {
+void Axis::setDirection(Direction direction) {
 	ioDirection.write(direction);
 }
 
-[[nodiscard]] Axis::Direction Axis::getDirection() noexcept {
+[[nodiscard]] Axis::Direction Axis::getDirection() const {
 	return static_cast<Direction>(ioDirection.read());
 }
 
@@ -148,22 +139,18 @@ void Axis::prvAxisTask(void* pvParameters) {
 	static size_t xTasksCreated{ 0 };
 	size_t xTaskID = xTasksCreated++;
 	uxBitsToWaitFor = (uxBitsToWaitFor << 1) | 1;
-	Axis* axis = (Axis*) pvParameters;
+	Axis& axis = *reinterpret_cast<Axis*>(pvParameters);
 
-	vTaskDelay(10); // Let pins stabilise
-	while (axis->obstructed());
+	vTaskDelay(1); // Let pins stabilise
 
-	axis->calibrate();
+	while (axis.obstructed());
 
-	float const fStepsPerMM = axis->getStepsPerMM();
+	float const fStepsPerMM = axis.calibrateStepsPerMM();
 
 	while (true) {
-		Move move = axis->dequeueMove();
+		Move move = axis.dequeueMove();
 		xEventGroupSync(xEventGroup, 1 << xTaskID, uxBitsToWaitFor, portMAX_DELAY);
-		if (move.isRelative) {
-			axis->startMove(move.fDistanceInMM * fStepsPerMM, move.xStepsPerSecond);
-		} else
-			axis->startMove(move.fDistanceInMM * fStepsPerMM - axis->getCurrentPosition(), move.xStepsPerSecond);
+		axis.startMove(move.fDistanceInMM * fStepsPerMM, move.xStepsPerSecond, move.isRelative);
 	}
 }
 

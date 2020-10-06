@@ -18,54 +18,54 @@
 
 #define ACCELERATING 0
 
-struct Move {
-	enum { Absolute, Relative };
-	bool isRelative;
-	float fDistanceInMM;
-	size_t xStepsPerSecond;
-};
+using StepStarter_t = void (*)(float);
+using StepStopper_t = void (*)();
 
 class Axis {
 public:
+	struct Move {
+		enum { Absolute, Relative };
+		bool isRelative;
+		float fDistanceInMM;
+		float xStepsPerSecond;
+	};
+
 	enum Direction { Clockwise = 0, CounterClockwise };
 
-	static constexpr size_t kInitialPPS{ 600 }, kPPSDelta{ 100 }, kHalfStepsPerRev{ 400 };
+	static constexpr Direction kTowardsOrigin{ Clockwise };
+	static constexpr size_t kMaximumPPS{ 2000 }, kPPSDelta{ 100 }, kHalfStepsPerRev{ 400 };
 
 	Axis(	size_t xSize,
 			DigitalIOPin ioStep,
 			DigitalIOPin ioDirection,
 			DigitalIOPin ioOriginSW,
 			DigitalIOPin ioLimitSW,
-			void (*start)(uint32_t stepsPerSecond),
-			void (*stop)()
+			StepStarter_t,
+			StepStopper_t
 	);
 
-	void startMove(int32_t xStepsToMove, uint32_t xStepsPerSecond = 1000) noexcept;
+	void startMove(int32_t xStepsToMove, float fStepsPerSecond = kMaximumPPS, bool bIsRelative = true);
 	void step();
-	bool obstructed();
+	[[nodiscard]] bool obstructed() const;
 	void enqueueMove(Move const & message);
-	Move dequeueMove();
-	void calibrate();
-	[[nodiscard]] int32_t getMaxPosition();
-	[[nodiscard]] int32_t getCurrentPosition();
-	[[nodiscard]] float getStepsPerMM();
+	[[nodiscard]] Move dequeueMove();
+	float calibrateStepsPerMM();
 
 private:
 	static constexpr int32_t kPositionUnknown{ -1 };
+	static constexpr Direction kTowardsLimit{ static_cast<Direction>(!kTowardsOrigin) };
+	static void prvAxisTask(void* pvParameters);
 
 	void endMove();
-	void setDirection(Direction direction) noexcept;
-	[[nodiscard]] Direction getDirection() noexcept;
-	static void prvAxisTask(void* pvParameters);
-	size_t xSize;
-	float fStepsPerMM;
+	void setDirection(Direction direction);
+	[[nodiscard]] Direction getDirection() const;
+	size_t const xSize;
 	DigitalIOPin ioStep, ioDirection, ioOriginSW, ioLimitSW;
-	void (*start)(uint32_t stepsPerSecond);
-	void (*stop)();
+	StepStarter_t start;
+	StepStopper_t stop;
 	std::atomic<int32_t> numberOfSteps{ 0 }, stepsRemaining{ 0 }, currentPosition{ 0 }, maximumPosition{ kPositionUnknown };
-	int32_t stepsPerSecond{ 1000 };
-	SemaphoreHandle_t moveComplete{ xSemaphoreCreateBinary() };
-	QueueWrapper<Move, 1> queue;
+	SemaphoreHandle_t xMoveComplete{ xSemaphoreCreateBinary() };
+	QueueWrapper<Move, 1> xMoveQueue;
 #if ACCELERATING
 	float volatile stepsPerSecond, stepsPerSecondAccel;
 #endif
