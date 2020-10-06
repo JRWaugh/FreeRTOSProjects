@@ -148,6 +148,8 @@ int main(void) {
         while (true) {
             USB_receive((uint8_t *) buffer, RCV_BUFSIZE);
 
+            ITM_write(buffer);
+
             auto const letter = buffer[0];
             auto const number = std::atoi(buffer + 1);
 

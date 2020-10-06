@@ -6,6 +6,8 @@
  */
 
 #include <Axis.h>
+#include "event_groups.h"
+#include <cmath>
 
 Axis::Axis(	size_t xSize,
         DigitalIOPin ioStep,
@@ -14,14 +16,14 @@ Axis::Axis(	size_t xSize,
         DigitalIOPin ioLimitSW,
         StepStarter_t start,
         StepStopper_t stop
-) : xSize{ xSize }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, start{ start }, stop{ stop } {
-    //ioStep.write(true);
+) : xSizeInMM{ xSize }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, start{ start }, stop{ stop } {
+    ioStep.write(true);
     xTaskCreate(prvAxisTask, nullptr, configMINIMAL_STACK_SIZE, this, tskIDLE_PRIORITY + 1UL, nullptr);
 }
 
 void Axis::startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSecond) {
     if (!bIsRelative)
-        xStepsToMove -= currentPosition;
+        xStepsToMove -= xCurrentPosition;
 
     if (xStepsToMove == 0)
         return;
@@ -30,7 +32,7 @@ void Axis::startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSeco
     else if (xStepsToMove < 0)
         setDirection(kTowardsOrigin);
 
-    numberOfSteps = stepsRemaining = abs(xStepsToMove);
+    xNumberOfSteps = xStepsRemaining = abs(xStepsToMove);
 
     start(fStepsPerSecond);
 
@@ -46,34 +48,34 @@ void Axis::endMove() {
 }
 
 void Axis::step() {
-    ioStep.write(true);
-
-    --stepsRemaining;
-    Direction direction = this->getDirection();
-
     ioStep.write(false);
 
+    --xStepsRemaining;
+    Direction direction = this->getDirection();
+
     if (direction == kTowardsOrigin) {
-        --currentPosition;
+        --xCurrentPosition;
         if (ioOriginSW.read()) {
-            if (maximumPosition == kPositionUnknown)
-                currentPosition = 0;
+            if (xMaximumPosition == kPositionUnknown)
+                xCurrentPosition = 0;
             endMove();
-        } else if (!stepsRemaining)
+        } else if (!xStepsRemaining)
             endMove();
     } else if (direction == kTowardsLimit) {
-        ++currentPosition;
+        ++xCurrentPosition;
 
         if (ioLimitSW.read()) {
-            if (maximumPosition == kPositionUnknown)
-                maximumPosition = currentPosition.load() - 1;
+            if (xMaximumPosition == kPositionUnknown)
+                xMaximumPosition = xCurrentPosition.load() - 1;
             endMove();
-        } else if (!stepsRemaining)
+        } else if (!xStepsRemaining)
             endMove();
     }
+
+    ioStep.write(true);
 }
 
-bool Axis::obstructed() const noexcept {
+bool Axis::obstructed() const {
     return ioOriginSW.read() && ioLimitSW.read();
 }
 
@@ -90,7 +92,7 @@ float Axis::calibrateStepsPerMM() {
     startMove(Move::Relative, INT32_MAX);
     startMove(Move::Absolute, 0);
 
-    return static_cast<float>(maximumPosition) / xSize;
+    return static_cast<float>(xMaximumPosition) / xSizeInMM;
 }
 
 void Axis::setDirection(Direction direction) {

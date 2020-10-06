@@ -12,9 +12,7 @@
 #include "semphr.h"
 #include "DigitalIOPin.h"
 #include <atomic>
-#include <cmath>
 #include "QueueWrapper.h"
-#include "event_groups.h"
 
 #define ACCELERATING 0
 
@@ -35,7 +33,7 @@ public:
     static constexpr Direction kTowardsOrigin{ Clockwise };
     static constexpr size_t kMaximumPPS{ 2000 }, kPPSDelta{ 100 }, kHalfStepsPerRev{ 400 };
 
-    Axis(	size_t xSize,
+    Axis(   size_t xSize,
             DigitalIOPin ioStep,
             DigitalIOPin ioDirection,
             DigitalIOPin ioOriginSW,
@@ -59,11 +57,11 @@ private:
     void endMove();
     void setDirection(Direction direction);
     [[nodiscard]] Direction getDirection() const;
-    size_t const xSize;
+    size_t const xSizeInMM;
     DigitalIOPin ioStep, ioDirection, ioOriginSW, ioLimitSW;
     StepStarter_t start;
     StepStopper_t stop;
-    std::atomic<int32_t> numberOfSteps{ 0 }, stepsRemaining{ 0 }, currentPosition{ 0 }, maximumPosition{ kPositionUnknown };
+    std::atomic<int32_t> xNumberOfSteps{ 0 }, xStepsRemaining{ 0 }, xCurrentPosition{ 0 }, xMaximumPosition{ kPositionUnknown };
     SemaphoreHandle_t xMoveComplete{ xSemaphoreCreateBinary() };
     QueueWrapper<Move, 1> xMoveQueue;
 #if ACCELERATING
