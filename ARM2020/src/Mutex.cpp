@@ -9,18 +9,18 @@
 
 namespace FreeRTOS {
 Mutex::Mutex() {
-	mutex = xSemaphoreCreateMutex();
+    mutex = xSemaphoreCreateMutex();
 }
 
 Mutex::~Mutex() {
-	vSemaphoreDelete(mutex);
+    vSemaphoreDelete(mutex);
 }
 
 void Mutex::lock() {
-	xSemaphoreTake(mutex, portMAX_DELAY);
+    xSemaphoreTake(mutex, portMAX_DELAY);
 }
 
 void Mutex::unlock() {
-	xSemaphoreGive(mutex);
+    xSemaphoreGive(mutex);
 }
 }

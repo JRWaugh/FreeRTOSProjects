@@ -15,13 +15,13 @@
 namespace FreeRTOS {
 class Mutex {
 public:
-	Mutex();
-	~Mutex();
-	void lock();
-	void unlock();
+    Mutex();
+    ~Mutex();
+    void lock();
+    void unlock();
 
 private:
-	SemaphoreHandle_t mutex;
+    SemaphoreHandle_t mutex;
 };
 }
 
