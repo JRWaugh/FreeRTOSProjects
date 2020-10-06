@@ -44,7 +44,7 @@ public:
 			StepStopper_t
 	);
 
-	void startMove(int32_t xStepsToMove, float fStepsPerSecond = kMaximumPPS, bool bIsRelative = true);
+	void startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSecond = kMaximumPPS);
 	void step();
 	[[nodiscard]] bool obstructed() const;
 	void enqueueMove(Move const & message);

@@ -15,7 +15,7 @@
 #include "ITM_write.h"
 #include "user_vcom.h"
 
-static constexpr size_t kTicksPerSecond{ 1'000'000 }, kFrequency{ 50 }, kPeriod{ kTicksPerSecond / kFrequency - 1 };
+static constexpr size_t kTicksPerSecond{ 1'000'000 }, kFrequency{ 50 }, kPeriod{ kTicksPerSecond / kFrequency };
 constexpr static auto MalformedCode = "Malformed code\r\n", UnknownCode = "Unknown code\r\n", NotAGCode = "Not a GCode\r\n";
 constexpr static auto OK = "OK\r\n";
 static LPCPinMap constexpr pinmapXStep{ 0, 24 }, pinmapXDir{ 1,   0 }, pinmapXOrigin{ 0,  9 }, pinmapXLimit{ 0, 29 };
@@ -24,11 +24,18 @@ static size_t width{ 150 }, height{ 100 };
 static Axis* X, * Y;
 
 static void prvSetPenPosition(uint8_t penPosition) {
-	LPC_SCT0->MATCHREL[1].U = 1000 + 1000 * penPosition / 255;
+	// Min == 5% duty cycle, Max == 10% duty cycle
+	static constexpr size_t kMinDutyCycle{ kPeriod / 20 }, kMaxDutyCycle{ kMinDutyCycle * 2 }, kDelta{ kMaxDutyCycle - kMinDutyCycle };
+	LPC_SCT0->MATCHREL[1].U = kMinDutyCycle + kDelta * penPosition / 255;
 }
 
 static void prvSetLaserPower(uint8_t laserPower) {
-	LPC_SCT2->MATCHREL[5].U = kPeriod * laserPower / 255;
+	if (laserPower > 0) {
+		LPC_SCT0->MATCHREL[3].U = laserPower;
+		LPC_SCT0->OUT[1].SET = 1 << 2;
+	} else {
+		LPC_SCT0->OUT[1].SET = 0;
+	}
 }
 
 static void prvSetupHardware() {
@@ -36,11 +43,32 @@ static void prvSetupHardware() {
 	Board_Init();
 	heap_monitor_setup();
 	ITM_init();
+
 	auto const prescale = SystemCoreClock / kTicksPerSecond - 1;
+
 	Chip_SCTPWM_Init(LPC_SCT0);
 	Chip_SCTPWM_Init(LPC_SCT2);
-	LPC_SCT2->CONFIG = SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L;
-	LPC_SCT2->CTRL_U = SCT_CTRL_PRE_L(prescale) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
+	LPC_SCT0->CONFIG = LPC_SCT2->CONFIG = SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L;
+	LPC_SCT0->CTRL_U = LPC_SCT2->CTRL_U =SCT_CTRL_PRE_L(prescale) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
+
+	// SCTimer config for pen servo motor.
+	LPC_SCT0->MATCHREL[0].U = kPeriod - 1;
+	prvSetPenPosition(160);
+	LPC_SCT0->EVENT[0].STATE = LPC_SCT0->EVENT[1].STATE = 0x1;
+	LPC_SCT0->EVENT[0].CTRL = 0 << 0 | 1 << 12;
+	LPC_SCT0->EVENT[1].CTRL = 1 << 0 | 1 << 12;
+	LPC_SCT0->OUT[0].SET = 1 << 0;
+	LPC_SCT0->OUT[0].CLR = 1 << 1;
+	Chip_SWM_MovablePortPinAssign(SWM_SCT0_OUT0_O, 0, 10);
+
+	// SCTimer config for laser.
+	LPC_SCT0->MATCHREL[2].U = 255;
+	prvSetLaserPower(0);
+	LPC_SCT0->EVENT[2].STATE = LPC_SCT0->EVENT[3].STATE = 0x1;
+	LPC_SCT0->EVENT[2].CTRL = 1 << 1 | 1 << 12;
+	LPC_SCT0->EVENT[3].CTRL = 1 << 2 | 1 << 12;
+	LPC_SCT0->OUT[1].CLR = 1 << 3;
+	Chip_SWM_MovablePortPinAssign(SWM_SCT0_OUT1_O, 0, 12);
 
 	// SCTimer Events for X and Y Axes. Match condition and the state in which events occur is set by callback function.
 	// No output is used, as the step pin is toggled manually in the interrupt.
@@ -51,27 +79,7 @@ static void prvSetupHardware() {
 	NVIC_SetPriority(SCT2_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY + 1);
 	NVIC_EnableIRQ(SCT2_IRQn);
 
-	LPC_SCT0->CONFIG = SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L;
-	LPC_SCT0->CTRL_U = SCT_CTRL_PRE_L(prescale) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
-	LPC_SCT0->MATCHREL[0].U = kPeriod;
-	prvSetPenPosition(160);
-	LPC_SCT0->EVENT[0].STATE = LPC_SCT0->EVENT[1].STATE = 0x1;
-	LPC_SCT0->EVENT[0].CTRL = 0 << 0 | 1 << 12;
-	LPC_SCT0->EVENT[1].CTRL = 1 << 0 | 1 << 12;
-	LPC_SCT0->OUT[0].SET = 1 << 0;
-	LPC_SCT0->OUT[0].CLR = 1 << 1;
-
-	// SCTimer Events and output for laser. Match condition set by prvSetLaserPower function.
-	LPC_SCT2->MATCHREL[4].U = kPeriod;
-	LPC_SCT2->EVENT[4].STATE = LPC_SCT2->EVENT[5].STATE = 0xFFFFFFFF;
-	LPC_SCT2->EVENT[4].CTRL = 1 << 3 | 1 << 12;
-	LPC_SCT2->EVENT[5].CTRL = 1 << 4 | 1 << 12;
-	LPC_SCT2->OUT[1].SET = 1 << 4;
-	LPC_SCT2->OUT[1].CLR = 1 << 5;
-	Chip_SWM_MovablePortPinAssign(SWM_SCT2_OUT1_O, 0, 12);
-	prvSetLaserPower(0);
-
-	// Start timer.
+	// Start timers.
 	LPC_SCT0->CTRL_L &= ~(1 << 2);
 	LPC_SCT2->CTRL_L &= ~(1 << 2);
 }
@@ -98,7 +106,6 @@ void SCT2_IRQHandler(void) {
 
 int main(void) {
 	prvSetupHardware();
-	Chip_SWM_MovablePortPinAssign(SWM_SCT0_OUT0_O, 0, 10);
 
 	X = new Axis{
 		width,
@@ -164,7 +171,6 @@ int main(void) {
 					ITM_write(MalformedCode);
 				break;
 
-
 			case G28: // Command from mDraw to move to origin
 				X->enqueueMove({ Axis::Move::Absolute, 0, Axis::kMaximumPPS });
 				Y->enqueueMove({ Axis::Move::Absolute, 0, Axis::kMaximumPPS });
@@ -179,7 +185,7 @@ int main(void) {
 				break;
 
 
-			case M2: { // Command from mDraw to set pen up and pen down positions
+			case M2: { // Command from mDraw to save pen up and pen down positions
 				uint8_t tempUp{ 0 }, tempDown{ 0 };
 
 				if (std::sscanf(buffer + 3, "U%hhu D%hhu", &tempUp, &tempDown) == 2) {
@@ -196,6 +202,8 @@ int main(void) {
 				if (std::sscanf(buffer + 3, "%hhu", &toolPulseWidth) == 1) {
 					while (LPC_SCT2->EVENT[0].STATE || LPC_SCT2->EVENT[1].STATE); // Poll until the steppers have stopped and they set their STATE registers to 0.
 					prvSetLaserPower(toolPulseWidth);
+					if (!toolPulseWidth)
+						vTaskDelay(200); // Simulator takes a bit to realise we've stopped the laser.
 				} else
 					ITM_write(MalformedCode);
 				break;

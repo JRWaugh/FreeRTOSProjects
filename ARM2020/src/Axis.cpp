@@ -15,11 +15,11 @@ Axis::Axis(	size_t xSize,
 		StepStarter_t start,
 		StepStopper_t stop
 ) : xSize{ xSize }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, start{ start }, stop{ stop } {
-	ioStep.write(true);
+	//ioStep.write(true);
 	xTaskCreate(prvAxisTask, nullptr, configMINIMAL_STACK_SIZE, this, tskIDLE_PRIORITY + 1UL, nullptr);
 }
 
-void Axis::startMove(int32_t xStepsToMove, float fStepsPerSecond, bool bIsRelative) {
+void Axis::startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSecond) {
 	if (!bIsRelative)
 		xStepsToMove -= currentPosition;
 
@@ -32,14 +32,6 @@ void Axis::startMove(int32_t xStepsToMove, float fStepsPerSecond, bool bIsRelati
 
 	numberOfSteps = stepsRemaining = abs(xStepsToMove);
 
-#if ACCELERATING
-	stepsPerSecondAccel = (xMaximumPPS - kInitialPPS) / (xJourneyLength * 0.1f);
-	if (fLinearPPSAccel > xMaximumPPS)
-		fLinearPPSAccel = xMaximumPPS;
-	else if (fLinearPPSAccel < 0)
-		fLinearPPSAccel = 0;
-	stepsPerSecond = kInitialPPS;
-#endif
 	start(fStepsPerSecond);
 
 	xSemaphoreTake(xMoveComplete, portMAX_DELAY);
@@ -47,16 +39,19 @@ void Axis::startMove(int32_t xStepsToMove, float fStepsPerSecond, bool bIsRelati
 
 void Axis::endMove() {
 	stop();
+
 	portBASE_TYPE xHigherPriorityWoken = pdFALSE;
 	xSemaphoreGiveFromISR(xMoveComplete, &xHigherPriorityWoken);
 	portEND_SWITCHING_ISR(xHigherPriorityWoken);
 }
 
 void Axis::step() {
-	ioStep.write(false);
+	ioStep.write(true);
 
 	--stepsRemaining;
 	Direction direction = this->getDirection();
+
+	ioStep.write(false);
 
 	if (direction == kTowardsOrigin) {
 		--currentPosition;
@@ -71,19 +66,11 @@ void Axis::step() {
 
 		if (ioLimitSW.read()) {
 			if (maximumPosition == kPositionUnknown)
-				maximumPosition = currentPosition.load();
+				maximumPosition = currentPosition.load() - 1;
 			endMove();
 		} else if (!stepsRemaining)
 			endMove();
 	}
-
-	ioStep.write(true);
-#if ACCELERATING
-	else if (stepsRemaining >= numberOfSteps * 0.90f)
-		start(stepsPerSecond += stepsPerSecondAccel);
-	else if (stepsRemaining <= numberOfSteps * 0.10f)
-		start(stepsPerSecond -= stepsPerSecondAccel);
-#endif
 }
 
 bool Axis::obstructed() const noexcept {
@@ -99,28 +86,9 @@ void Axis::enqueueMove(Move const & message) {
 }
 
 float Axis::calibrateStepsPerMM() {
-	startMove(INT32_MIN);
-	startMove(INT32_MAX);
-#if ACCELERATING == 1
-	BaseType_t toggle = -1;
-	xEventGroupSetBits(xPlotterFlagGroup, CalibratingPPS);
-	while (xEventGroupGetBits(xPlotterFlagGroup) & CalibratingPPS) {
-		xMaximumPPS += kPPSDelta;
-		prvMoveToRelativePosition(xPlotterWidth * toggle);
-		toggle = 0 - toggle;
-
-		if (xRemainingJourneyLength == 0 && !ioXOriginPin->read() && !ioXLimitPin->read())
-			xEventGroupClearBits(xPlotterFlagGroup, CalibratingPPS);
-	}
-
-	// Reset default PPS. Rework this to be less bad at some point!
-	xMaximumPPS -= kPPSDelta;
-
-	// We've lost our position so we need to find it again.
-	xEventGroupClearBits(xPlotterFlagGroup, PositionFound);
-	prvMoveToRelativePosition(INT16_MIN);
-#endif
-	startMove(0, kMaximumPPS, Move::Absolute);
+	startMove(Move::Relative, INT32_MIN);
+	startMove(Move::Relative, INT32_MAX);
+	startMove(Move::Absolute, 0);
 
 	return static_cast<float>(maximumPosition) / xSize;
 }
@@ -141,7 +109,7 @@ void Axis::prvAxisTask(void* pvParameters) {
 	uxBitsToWaitFor = (uxBitsToWaitFor << 1) | 1;
 	Axis& axis = *reinterpret_cast<Axis*>(pvParameters);
 
-	vTaskDelay(1); // Let pins stabilise
+	vTaskDelay(10); // Let pins stabilise
 
 	while (axis.obstructed());
 
@@ -150,7 +118,7 @@ void Axis::prvAxisTask(void* pvParameters) {
 	while (true) {
 		Move move = axis.dequeueMove();
 		xEventGroupSync(xEventGroup, 1 << xTaskID, uxBitsToWaitFor, portMAX_DELAY);
-		axis.startMove(move.fDistanceInMM * fStepsPerMM, move.xStepsPerSecond, move.isRelative);
+		axis.startMove(move.isRelative, move.fDistanceInMM * fStepsPerMM, move.xStepsPerSecond);
 	}
 }
 
