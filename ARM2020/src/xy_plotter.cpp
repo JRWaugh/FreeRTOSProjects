@@ -23,20 +23,24 @@ static LPCPinMap constexpr pinmapYStep{ 0, 27 }, pinmapYDir{ 0,  28 }, pinmapYOr
 static size_t width{ 150 }, height{ 100 };
 static Axis* X, * Y;
 
-static void prvSetLaserPower(uint8_t laserPower) {
-	LPC_SCT2->EVENT[4].STATE = LPC_SCT2->EVENT[5].STATE = 0x1;
-	LPC_SCT2->EVENT[4].CTRL = 1 << 3 | 1 << 12;
-	LPC_SCT2->EVENT[5].CTRL = 1 << 4 | 1 << 12;
-	LPC_SCT2->MATCHREL[4].U = kPeriod;
-	LPC_SCT2->MATCHREL[5].U = kPeriod * laserPower / 255;
-}
+struct MoveConfig {
+	float x;
+	float y;
+	uint8_t isRelative;
+	uint8_t plotterControl;
+	void (*setPlotterControl)(uint8_t plotterControl) = nullptr;
+};
+
+static QueueWrapper<MoveConfig, 6>* xMoveQueue;
 
 static void prvSetPenPosition(uint8_t penPosition) {
-	LPC_SCT2->EVENT[2].STATE = LPC_SCT2->EVENT[3].STATE = 0x1;
-	LPC_SCT2->EVENT[2].CTRL = 1 << 1 | 1 << 12;
-	LPC_SCT2->EVENT[3].CTRL = 1 << 2 | 1 << 12;
 	LPC_SCT2->MATCHREL[2].U = kPeriod;
 	LPC_SCT2->MATCHREL[3].U = kPeriod * penPosition / 255;
+}
+
+static void prvSetLaserPower(uint8_t laserPower) {
+	LPC_SCT2->MATCHREL[4].U = kPeriod;
+	LPC_SCT2->MATCHREL[5].U = kPeriod * laserPower / 255;
 }
 
 static void prvSetupHardware() {
@@ -48,15 +52,36 @@ static void prvSetupHardware() {
 	Chip_SCTPWM_Init(LPC_SCT2);
 	LPC_SCT2->CONFIG = SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L;
 	LPC_SCT2->CTRL_U = SCT_CTRL_PRE_L(prescale) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
-	LPC_SCT2->EVENT[0].CTRL = 0 << 0 | 1 << 12;
-	LPC_SCT2->EVENT[1].CTRL = 1 << 0 | 1 << 12;
-	prvSetPenPosition(160);
-	prvSetLaserPower(0);
+
+	// SCTimer Events for X and Y Axes. Match condition and the state in which events occur is set by callback function.
+	// No output is used, as the step pin is toggled manually in the interrupmove.
+	LPC_SCT2->EVENT[0].CTRL = 0 << 0 | 1 << 12; // X axis event is set by Match 0 condition
+	LPC_SCT2->EVENT[1].CTRL = 1 << 0 | 1 << 12; // Y axis event is set by Match 1 condition
 	LPC_SCT2->RES = 0xF;
 	LPC_SCT2->EVEN = SCT_EVT_0 | SCT_EVT_1;
-	LPC_SCT2->CTRL_L &= ~(1 << 2);
 	NVIC_SetPriority(SCT2_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY + 1);
 	NVIC_EnableIRQ(SCT2_IRQn);
+
+	// SCTimer Events and output for pen servo. Match condition set by prvSetPenPosition function.
+	LPC_SCT2->EVENT[2].STATE = LPC_SCT2->EVENT[3].STATE = 0x1;
+	LPC_SCT2->EVENT[2].CTRL = 1 << 1 | 1 << 12;
+	LPC_SCT2->EVENT[3].CTRL = 1 << 2 | 1 << 12;
+	LPC_SCT2->OUT[0].SET = 1 << 2;
+	LPC_SCT2->OUT[0].CLR = 1 << 3;
+	Chip_SWM_MovablePortPinAssign(SWM_SCT2_OUT0_O, 0, 10);
+	prvSetPenPosition(160);
+
+	// SCTimer Events and output for laser. Match condition set by prvSetLaserPower function.
+	LPC_SCT2->EVENT[4].STATE = LPC_SCT2->EVENT[5].STATE = 0x1;
+	LPC_SCT2->EVENT[4].CTRL = 1 << 3 | 1 << 12;
+	LPC_SCT2->EVENT[5].CTRL = 1 << 4 | 1 << 12;
+	LPC_SCT2->OUT[1].SET = 1 << 4;
+	LPC_SCT2->OUT[1].CLR = 1 << 5;
+	Chip_SWM_MovablePortPinAssign(SWM_SCT2_OUT0_O, 0, 12);
+	prvSetLaserPower(0);
+
+	// Start timer.
+	LPC_SCT2->CTRL_L &= ~(1 << 2);
 }
 
 extern "C" {
@@ -112,15 +137,17 @@ int main(void) {
 		}
 	};
 
+	xMoveQueue = new QueueWrapper<MoveConfig, 6>();
+
 	xTaskCreate([](void* pvParameters){
 		constexpr static Axis::Direction kTowardsOrigin{ Axis::Direction::Clockwise };
 		uint8_t penUp{ 160 }, penDown{ 90 }, speed{ 80 };
+		MoveConfig move;
 
 		char buffer[RCV_BUFSIZE + 1];
 
 		while (true) {
 			USB_receive((uint8_t *) buffer, RCV_BUFSIZE);
-			ITM_write(buffer);
 
 			auto const letter = buffer[0];
 			auto const number = std::atoi(buffer + 1);
@@ -128,32 +155,17 @@ int main(void) {
 			switch (letter) {
 			case 'G': {
 				switch (number) {
-				case 1: {
-					float x{ 0 }, y{ 0 };
-					bool relative{ 0 };
-
-					if (std::sscanf(buffer + 3, "X%f Y%f A%hhu", &x, &y, &relative) == 3) {
-						if (relative) {
-							if (std::abs(x) < std::abs(y)) {
-								X->enqueueMove({ (bool) relative, x, std::abs(x) * 1000 / std::abs(y) });
-								Y->enqueueMove({ (bool) relative, y, 1000 });
-							} else {
-								X->enqueueMove({ (bool) relative, x, 1000 });
-								Y->enqueueMove({ (bool) relative, y, std::abs(y) * 1000 / std::abs(x) });
-							}
-						} else {
-							X->enqueueMove({ (bool) relative, x, 1000 });
-							Y->enqueueMove({ (bool) relative, y, 1000 });
-						}
-					}
+				case 1:
+					if (std::sscanf(buffer + 3, "X%f Y%f A%hhu", &move.x, &move.y, &move.isRelative) == 3)
+						xMoveQueue->push_back(move, portMAX_DELAY);
 					else
 						ITM_write(MalformedCode);
 					break;
-				}
 
 				case 28:
-					X->enqueueMove({ Move::Absolute, 0 });
-					Y->enqueueMove({ Move::Absolute, 0 });
+					move.x = move.y = 0;
+					move.isRelative = false;
+					xMoveQueue->push_back(move, portMAX_DELAY);
 					break;
 
 				default:
@@ -165,20 +177,17 @@ int main(void) {
 
 			case 'M': {
 				switch (number) {
-				case 1: {
-					uint8_t penPosition{ 0 };
-
-					if (std::sscanf(buffer + 3, "%c", &penPosition) == 1)
-						prvSetPenPosition(penPosition);
+				case 1:
+					if (std::sscanf(buffer + 3, "%hhu", &move.plotterControl) == 1)
+						move.setPlotterControl = prvSetPenPosition;
 					else
 						ITM_write(MalformedCode);
 					break;
-				}
 
 				case 2: {
 					uint8_t tempUp{ 0 }, tempDown{ 0 };
 
-					if (std::sscanf(buffer + 3, "U%c D%c", &tempUp, &tempDown) == 2) {
+					if (std::sscanf(buffer + 3, "U%hhu D%hhu", &tempUp, &tempDown) == 2) {
 						penUp = tempUp;
 						penDown = tempDown;
 					}
@@ -187,16 +196,12 @@ int main(void) {
 					break;
 				}
 
-				case 4: {
-					uint8_t laserPower{ 0 };
-
-					if (std::sscanf(buffer + 3, "%c", &laserPower) == 1)
-						prvSetLaserPower(laserPower);
+				case 4:
+					if (std::sscanf(buffer + 3, "%hhu", &move.plotterControl) == 1)
+						move.setPlotterControl = prvSetLaserPower;
 					else
 						ITM_write(MalformedCode);
-
 					break;
-				}
 
 				case 5: {
 					uint8_t tempXDir{ 0 }, tempYDir{ 0 }, tempSpeed{ 0 };
@@ -222,7 +227,7 @@ int main(void) {
 					break;
 
 				case 11:
-					USB_send((uint8_t*) "M11 0 0 0 0\r\nOK\r\n", 17);
+					USB_send((uint8_t*) "M11 0 0 0 0\r\n", 17);
 					break;
 
 				default:
@@ -238,7 +243,29 @@ int main(void) {
 			}
 			USB_send((uint8_t *) OK, sizeof(OK));
 		}
-	}, "Code Parser", configMINIMAL_STACK_SIZE + 512, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
+	}, "GCode Parser", configMINIMAL_STACK_SIZE + 256, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
+
+	xTaskCreate([](void* pvParameters) {
+		while (true) {
+			auto move = xMoveQueue->pop_front(portMAX_DELAY);
+
+			if (move.setPlotterControl != nullptr)
+				move.setPlotterControl(move.plotterControl);
+
+			if (move.isRelative) {
+				if (std::abs(move.x) < std::abs(move.y)) {
+					X->enqueueMove({ Move::Relative, move.x, std::abs(move.x) * 1000 / std::abs(move.y) });
+					Y->enqueueMove({ Move::Relative, move.y, 1000 });
+				} else {
+					X->enqueueMove({ Move::Relative, move.x, 1000 });
+					Y->enqueueMove({ Move::Relative, move.y, std::abs(move.y) * 1000 / std::abs(move.x) });
+				}
+			} else {
+				X->enqueueMove({ Move::Absolute, move.x, 1000 });
+				Y->enqueueMove({ Move::Absolute, move.y, 1000 });
+			}
+		}
+	}, "Plotter Co-ordinator", configMINIMAL_STACK_SIZE + 128, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 
 	xTaskCreate(cdc_task, "CDC", configMINIMAL_STACK_SIZE + 128, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 

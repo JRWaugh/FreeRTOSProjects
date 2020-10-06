@@ -15,9 +15,9 @@
 #include "timers.h"
 #include <cstring>
 
-#define EX1 1
+#define EX1 0
 #define EX2 0
-#define EX3 0
+#define EX3 1
 
 struct IOTimestamp {
 	BaseType_t which = 0;
@@ -104,10 +104,10 @@ int main(void) {
 				queue->push_back({ 3, xTaskGetTickCountFromISR() });
 		}};
 
-		IOTimestamp previous = queue->pop_back(portMAX_DELAY);
+		IOTimestamp previous = queue->pop_front();
 
 		while (true) {
-			IOTimestamp const current = queue->pop_back(portMAX_DELAY);
+			IOTimestamp const current = queue->pop_front();
 			TickType_t const delta = current.when - previous.when;
 
 			if (delta > filter)
@@ -201,7 +201,7 @@ int main(void) {
 		Board_LED_Set(0, true);
 
 		while (true) {
-			IOTimestamp const current = queue->pop_back(portMAX_DELAY);
+			IOTimestamp const current = queue->pop_front();
 			if (current.which == 2) {
 				Board_LED_Set(0, false);
 				Board_LED_Set(2, true);

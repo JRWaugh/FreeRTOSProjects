@@ -65,7 +65,7 @@ private:
 	std::atomic<int32_t> numberOfSteps{ 0 }, stepsRemaining{ 0 }, currentPosition{ 0 }, maximumPosition{ kPositionUnknown };
 	int32_t stepsPerSecond{ 1000 };
 	SemaphoreHandle_t moveComplete{ xSemaphoreCreateBinary() };
-	QueueWrapper<Move, 6> queue;
+	QueueWrapper<Move, 1> queue;
 #if ACCELERATING
 	float volatile stepsPerSecond, stepsPerSecondAccel;
 #endif
