@@ -26,9 +26,9 @@ extern "C"
 void cdc_task(void *pvParameters);
 
 /* Writes data to USB com port, maximum length not restricted.
- * This function it thread safe and blocks until the data has been transmitted.
+ * This function is thread safe and blocks until the data has been transmitted.
  *  */
-void USB_send(uint8_t *data, uint32_t length);
+void USB_send(char const * data, uint32_t length);
 
 /* Reads data from USB com port.
  * Function returns number of received bytes.
@@ -37,7 +37,7 @@ void USB_send(uint8_t *data, uint32_t length);
  * Length must be at least RCV_BUFSIZE. If length is smaller some data may be discarded.
  * Function checks data sizes and never overflows buffers. If available data is longer than specified buffer
  * size the excess data is discarded */
-uint32_t USB_receive(uint8_t *data, uint32_t length);
+uint32_t USB_receive(char* data, uint32_t length);
 
 #ifdef __cplusplus
 }

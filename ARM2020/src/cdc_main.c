@@ -54,7 +54,7 @@ static USBD_HANDLE_T g_hUsb;
 static uint8_t g_rxBuff[RCV_BUFFERS][RCV_BUFSIZE];
 const  USBD_API_T *g_pUsbApi;
 typedef struct {
-	uint8_t *dptr;
+	char* dptr;
 	uint32_t dlen;
 } SendItem;
 
@@ -74,7 +74,7 @@ static EventGroupHandle_t EventGroup;
  * Public functions
  ****************************************************************************/
 
-void USB_send(uint8_t *data, uint32_t length) {
+void USB_send(char const * data, uint32_t length) {
 	while (EventGroup == NULL);
 	xEventGroupWaitBits(EventGroup, 1 << 0, pdFALSE, pdTRUE, portMAX_DELAY);
 	SendItem send = { data, length };
@@ -85,7 +85,7 @@ void USB_send(uint8_t *data, uint32_t length) {
 	xSemaphoreGive(SendMutex);
 }
 
-uint32_t USB_receive(uint8_t *data, uint32_t length) {
+uint32_t USB_receive(char* data, uint32_t length) {
 	while (EventGroup == NULL);
 	xEventGroupWaitBits(EventGroup, 1 << 0, pdFALSE, pdTRUE, portMAX_DELAY);
 

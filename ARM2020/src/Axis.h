@@ -33,19 +33,20 @@ public:
     static constexpr Direction kTowardsOrigin{ Clockwise };
     static constexpr size_t kMaximumPPS{ 2000 }, kPPSDelta{ 100 }, kHalfStepsPerRev{ 400 };
 
-    Axis(   size_t xSize,
-            DigitalIOPin ioStep,
-            DigitalIOPin ioDirection,
-            DigitalIOPin ioOriginSW,
-            DigitalIOPin ioLimitSW,
+    Axis(   size_t xSizeInMM,
+            DigitalIOPin&& ioStep,
+            DigitalIOPin&& ioDirection,
+            DigitalIOPin&& ioOriginSW,
+            DigitalIOPin&& ioLimitSW,
             StepStarter_t,
             StepStopper_t
     );
 
     void startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSecond = kMaximumPPS);
     void step();
-    [[nodiscard]] bool obstructed() const;
-    void enqueueMove(Move const & message);
+    [[nodiscard]] bool originSWPressed();
+    [[nodiscard]] bool limitSWPressed();
+    BaseType_t enqueueMove(Move const & message);
     [[nodiscard]] Move dequeueMove();
     float calibrateStepsPerMM();
 
@@ -61,7 +62,7 @@ private:
     DigitalIOPin ioStep, ioDirection, ioOriginSW, ioLimitSW;
     StepStarter_t start;
     StepStopper_t stop;
-    std::atomic<int32_t> xNumberOfSteps{ 0 }, xStepsRemaining{ 0 }, xCurrentPosition{ 0 }, xMaximumPosition{ kPositionUnknown };
+    std::atomic<int32_t> xStepsRemaining{ 0 }, xCurrentPosition{ 0 }, xMaximumPosition{ kPositionUnknown };
     SemaphoreHandle_t xMoveComplete{ xSemaphoreCreateBinary() };
     QueueWrapper<Move, 1> xMoveQueue;
 #if ACCELERATING

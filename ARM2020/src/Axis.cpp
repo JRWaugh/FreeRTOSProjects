@@ -9,16 +9,16 @@
 #include "event_groups.h"
 #include <cmath>
 
-Axis::Axis(	size_t xSize,
-        DigitalIOPin ioStep,
-        DigitalIOPin ioDirection,
-        DigitalIOPin ioOriginSW,
-        DigitalIOPin ioLimitSW,
+Axis::Axis(	size_t xSizeInMM,
+        DigitalIOPin&& ioStep,
+        DigitalIOPin&& ioDirection,
+        DigitalIOPin&& ioOriginSW,
+        DigitalIOPin&& ioLimitSW,
         StepStarter_t start,
         StepStopper_t stop
-) : xSizeInMM{ xSize }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, start{ start }, stop{ stop } {
+) : xSizeInMM{ xSizeInMM }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, start{ start }, stop{ stop } {
     ioStep.write(true);
-    xTaskCreate(prvAxisTask, nullptr, configMINIMAL_STACK_SIZE, this, tskIDLE_PRIORITY + 1UL, nullptr);
+    xTaskCreate(prvAxisTask, nullptr, 70, this, tskIDLE_PRIORITY + 1UL, nullptr);
 }
 
 void Axis::startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSecond) {
@@ -32,10 +32,8 @@ void Axis::startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSeco
     else if (xStepsToMove < 0)
         setDirection(kTowardsOrigin);
 
-    xNumberOfSteps = xStepsRemaining = abs(xStepsToMove);
-
+    xStepsRemaining = abs(xStepsToMove);
     start(fStepsPerSecond);
-
     xSemaphoreTake(xMoveComplete, portMAX_DELAY);
 }
 
@@ -75,12 +73,16 @@ void Axis::step() {
     ioStep.write(true);
 }
 
-bool Axis::obstructed() const {
-    return ioOriginSW.read() && ioLimitSW.read();
+bool Axis::originSWPressed() {
+    return ioOriginSW.read();
 }
 
-void Axis::enqueueMove(Move const & message) {
-    xMoveQueue.push_back(message, portMAX_DELAY);
+bool Axis::limitSWPressed() {
+    return ioLimitSW.read();
+}
+
+BaseType_t Axis::enqueueMove(Move const & message) {
+    return xMoveQueue.push_back(message, portMAX_DELAY);
 }
 
 [[nodiscard]] Axis::Move Axis::dequeueMove() {
@@ -113,7 +115,7 @@ void Axis::prvAxisTask(void* pvParameters) {
 
     vTaskDelay(10); // Let pins stabilise
 
-    while (axis.obstructed());
+    while (axis.originSWPressed() && axis.limitSWPressed());
 
     float const fStepsPerMM = axis.calibrateStepsPerMM();
 
