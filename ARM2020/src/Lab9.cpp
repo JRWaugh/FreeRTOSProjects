@@ -72,12 +72,15 @@ int main(void) {
         auto& ioButton{ *reinterpret_cast<DigitalIOPin*>(pvParameters) };
 
         while (true) {
-            ioButton.read(true, portMAX_DELAY); // Waits for interrupt
+            ioButton.WFI(true, portMAX_DELAY);
             xEventGroupSetBits(xEventGroup, 1 << 0);
         }
     }, "Task 1", configMINIMAL_STACK_SIZE, ioButton1, tskIDLE_PRIORITY + 1UL, nullptr);
+
     xTaskCreate(prvEventWaitTask, "Task 2", configMINIMAL_STACK_SIZE + 80, std_rand, tskIDLE_PRIORITY + 1UL, nullptr);
+
     xTaskCreate(prvEventWaitTask, "Task 3", configMINIMAL_STACK_SIZE + 80, std_rand, tskIDLE_PRIORITY + 1UL, nullptr);
+
     xTaskCreate(prvEventWaitTask, "Task 4", configMINIMAL_STACK_SIZE + 80, std_rand, tskIDLE_PRIORITY + 1UL, nullptr);
 
 #elif EX2
@@ -92,7 +95,7 @@ int main(void) {
         auto& ioButton{ *reinterpret_cast<DigitalIOPin*>(pvParameters) };
 
         while (true) {
-            ioButton.read(true, portMAX_DELAY); // Wait for button to be true after semaphore is given by ISR
+            ioButton.WFI(true, portMAX_DELAY);
             if (++count == xTaskNumber) {
                 xEventGroupSync(xEventGroup, 1 << xTaskNumber, 1 << 1 | 1 << 2 | 1 << 3, portMAX_DELAY);
                 uart->print(
@@ -104,9 +107,11 @@ int main(void) {
         }
     };
 
-    xTaskCreate(prvEventWaitTask, "Task 1", configMINIMAL_STACK_SIZE, ioButton1, tskIDLE_PRIORITY + 1UL, nullptr);
-    xTaskCreate(prvEventWaitTask, "Task 2", configMINIMAL_STACK_SIZE, ioButton2, tskIDLE_PRIORITY + 1UL, nullptr);
-    xTaskCreate(prvEventWaitTask, "Task 3", configMINIMAL_STACK_SIZE, ioButton3, tskIDLE_PRIORITY + 1UL, nullptr);
+    xTaskCreate(prvEventWaitTask, "Task 1", configMINIMAL_STACK_SIZE + 80, ioButton1, tskIDLE_PRIORITY + 1UL, nullptr);
+
+    xTaskCreate(prvEventWaitTask, "Task 2", configMINIMAL_STACK_SIZE + 80, ioButton2, tskIDLE_PRIORITY + 1UL, nullptr);
+
+    xTaskCreate(prvEventWaitTask, "Task 3", configMINIMAL_STACK_SIZE + 80, ioButton3, tskIDLE_PRIORITY + 1UL, nullptr);
 
 #elif EX3
 
@@ -115,21 +120,27 @@ int main(void) {
         size_t const xTaskNumber{xTasksCreated++ };
         auto& ioButton{ *reinterpret_cast<DigitalIOPin*>(pvParameters) };
 
-        while (true)
-            if (ioButton.read(false, portMAX_DELAY)) // Wait indefinitely for falling edge
+        while (true) {
+            if (ioButton.WFI(false, portMAX_DELAY))
                 xEventGroupSetBits(xEventGroup, 1 << xTaskNumber);
+        }
     };
 
     xTaskCreate(prvEventWaitTask, "Task 1", configMINIMAL_STACK_SIZE, ioButton1, tskIDLE_PRIORITY + 1UL, nullptr);
+
     xTaskCreate(prvEventWaitTask, "Task 2", configMINIMAL_STACK_SIZE, ioButton2, tskIDLE_PRIORITY + 1UL, nullptr);
+
     xTaskCreate(prvEventWaitTask, "Task 3", configMINIMAL_STACK_SIZE, ioButton3, tskIDLE_PRIORITY + 1UL, nullptr);
+
     xTaskCreate([](void* pvParameters){
-        UBaseType_t const uxBitsToWaitFor{ 1 << 0 | 1 << 1 | 1 << 2 };
+        static UBaseType_t constexpr uxBitsToWaitFor{ 1 << 0 | 1 << 1 | 1 << 2 };
         TickType_t const xStartTicks{ xTaskGetTickCount() };
         TickType_t xPreviousTicks{ xStartTicks };
         while (true) {
-            auto const uxBits{ xEventGroupWaitBits(xEventGroup, uxBitsToWaitFor, pdTRUE, pdTRUE, configTICK_RATE_HZ * 30) };
+            auto const uxBits = xEventGroupWaitBits(xEventGroup, uxBitsToWaitFor, pdTRUE, pdTRUE, configTICK_RATE_HZ * 30);
+
             TickType_t xCurrentTicks{ xTaskGetTickCount() };
+
             if (uxBits == uxBitsToWaitFor) {
                 uart->print("OK!\r\nTime elapsed: %d\r\n", xCurrentTicks - xPreviousTicks);
                 xPreviousTicks = xCurrentTicks;
@@ -139,7 +150,6 @@ int main(void) {
                         uart->print("Task %d failed after %d ticks!\r\n", i, xCurrentTicks - xStartTicks);
                 vTaskSuspend(nullptr);
             }
-
         }
     }, "Task 4", configMINIMAL_STACK_SIZE + 128, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 
@@ -151,20 +161,24 @@ int main(void) {
         auto& ioButton{ *reinterpret_cast<DigitalIOPin*>(pvParameters) };
 
         while (true) {
-            if (ioButton.read(false, configTICK_RATE_HZ * 30) == pdFALSE) // Wait 30 seconds for falling edge
+            if (ioButton.WFI(false, configTICK_RATE_HZ * 30) == pdFALSE) // Wait 30 seconds for falling edge
                 xEventGroupSetBits(xEventGroup, 1 << xTaskNumber);
         }
     };
 
     xTaskCreate(prvEventWaitTask, "Task 1", configMINIMAL_STACK_SIZE, ioButton1, tskIDLE_PRIORITY + 1UL, nullptr);
+
     xTaskCreate(prvEventWaitTask, "Task 2", configMINIMAL_STACK_SIZE, ioButton2, tskIDLE_PRIORITY + 1UL, nullptr);
+
     xTaskCreate(prvEventWaitTask, "Task 3", configMINIMAL_STACK_SIZE, ioButton3, tskIDLE_PRIORITY + 1UL, nullptr);
+
     xTaskCreate([](void* pvParameters){
         UBaseType_t const uxBitsToWaitFor{ 1 << 0 | 1 << 1 | 1 << 2 };
         TickType_t const xStartTicks{ xTaskGetTickCount() };
         while (true) {
             xEventGroupWaitBits(xEventGroup, uxBitsToWaitFor, pdFALSE, pdFALSE, portMAX_DELAY);
-            auto const uxBits{ xEventGroupGetBits(xEventGroup) }; // Bit wonky, but means we'll be able to get multiple bits instead of just the first
+
+            auto const uxBits = xEventGroupGetBits(xEventGroup); // Bit wonky, but means we'll be able to get multiple bits instead of just the first
             for (size_t i = 0; i < 3; ++i)
                 if (uxBits & 1 << i)
                     uart->print("Task %d failed after %d ticks!\r\n", i, xTaskGetTickCount() - xStartTicks);
