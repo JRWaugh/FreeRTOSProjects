@@ -18,7 +18,12 @@ Axis::Axis(	size_t xSizeInMM,
         StepStopper_t stop
 ) : xSizeInMM{ xSizeInMM }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, start{ start }, stop{ stop } {
     ioStep.write(true);
-    xTaskCreate(prvAxisTask, nullptr, 70, this, tskIDLE_PRIORITY + 1UL, nullptr);
+    xTaskCreate(prvAxisTask, nullptr, 70, this, tskIDLE_PRIORITY + 1UL, &xTaskHandle);
+}
+
+Axis::~Axis() {
+    vTaskDelete(xTaskHandle);
+    vSemaphoreDelete(xMoveComplete);
 }
 
 void Axis::startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSecond) {

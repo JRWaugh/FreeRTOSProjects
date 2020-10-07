@@ -21,7 +21,7 @@ public:
     ~DigitalIOPin();
 
     bool read() const;
-    BaseType_t read(bool const value, TickType_t xBlockTime);
+    BaseType_t WFI(bool const value, TickType_t xBlockTime);
     void write(bool const value);
     bool toggle();
 

@@ -92,6 +92,8 @@ DigitalIOPin::~DigitalIOPin() {
     Chip_PININT_DisableIntLow(LPC_GPIO_PIN_INT, PININTCH(channel));
 
     io[channel] = nullptr;
+
+    vSemaphoreDelete(xSemaphore);
 }
 
 bool DigitalIOPin::read() const {
@@ -99,14 +101,14 @@ bool DigitalIOPin::read() const {
 }
 
 
-BaseType_t DigitalIOPin::read(bool const value, TickType_t xBlockTime) {
+BaseType_t DigitalIOPin::WFI(bool const value, TickType_t xBlockTime) {
     TickType_t const xStartTicks = xTaskGetTickCount();
     if (xSemaphoreTake(xSemaphore, xBlockTime) == pdTRUE) {
         if (read() == value)
             return pdTRUE;
         else {
             xBlockTime = (xBlockTime == portMAX_DELAY) ? portMAX_DELAY : xBlockTime - (xTaskGetTickCount() - xStartTicks);
-            return read(value, xBlockTime);
+            return WFI(value, xBlockTime);
         }
     } else {
         return pdFALSE;

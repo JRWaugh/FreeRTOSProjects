@@ -42,6 +42,8 @@ public:
             StepStopper_t
     );
 
+    ~Axis();
+
     void startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSecond = kMaximumPPS);
     void step();
     [[nodiscard]] bool originSWPressed();
@@ -64,6 +66,7 @@ private:
     StepStopper_t stop;
     std::atomic<int32_t> xStepsRemaining{ 0 }, xCurrentPosition{ 0 }, xMaximumPosition{ kPositionUnknown };
     SemaphoreHandle_t xMoveComplete{ xSemaphoreCreateBinary() };
+    TaskHandle_t xTaskHandle;
     QueueWrapper<Move, 1> xMoveQueue;
 #if ACCELERATING
     float volatile stepsPerSecond, stepsPerSecondAccel;
