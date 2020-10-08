@@ -15,7 +15,7 @@
 #include <cstring>
 #include "ITM_write.h"
 
-#define EX1 0
+#define EX1 1
 #define EX2 1
 #define EX3 1
 
@@ -154,7 +154,7 @@ int main(void) {
     xTaskCreate([](void* pvParameters) {
         DigitalIOPin ioButton1{{ 0, 8 }, true, true, true };
         DigitalIOPin ioButton2{{ 1, 6 }, true, true, true };
-        DigitalIOPin ioButton3{{ 1,  8 }, true, true, true };
+        DigitalIOPin ioButton3{{ 1, 8 }, true, true, true };
 
         while (true) {
             if (ioButton1.read()) {
@@ -199,12 +199,12 @@ int main(void) {
         vTaskDelay(100); // wait until USB CDC semaphores are created
 
         while (true) {
-            auto len = USB_receive((uint8_t *) rcv_buffer, RCV_BUFSIZE);
+            auto len = USB_receive(rcv_buffer, RCV_BUFSIZE);
 
-            // Copy received bytes into buffer and process chars at the same time
+            // Copy received bytes into buffer and process the characters at the same time
             for (size_t i = 0; i < len; ++i) {
                 if (rcv_buffer[i] == '\r' || rcv_buffer[i] == '\n') {
-                    USB_send((uint8_t *) "\r\n", 2);
+                    USB_send("\r\n", 2);
                     cmd_buffer[count] = '\0';
 
                     if (char* res = strstr(cmd_buffer, "rgb #"); res != nullptr) {
@@ -216,7 +216,7 @@ int main(void) {
                     }
                     count = 0;
                 } else {
-                    USB_send((uint8_t *) &rcv_buffer[i], 1);
+                    USB_send(&rcv_buffer[i], 1);
 
                     if (rcv_buffer[i] == 127 && count > 0)  // "Backspace", encoded as DEL by Putty
                         --count;
@@ -224,7 +224,7 @@ int main(void) {
                         cmd_buffer[count++] = rcv_buffer[i];
                         if (count == RCV_BUFSIZE) {
                             constexpr char error[] = "\r\nBuffer full!\r\n";
-                            USB_send((uint8_t *) error, strlen(error));
+                            USB_send(error, strlen(error));
                             count = 0;
                         }
                     }

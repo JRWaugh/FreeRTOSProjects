@@ -14,7 +14,7 @@
 #include "event_groups.h"
 #include <random>
 
-#define EX1 0
+#define EX1 1
 #define EX2 0
 #define EX3 0
 #define EX3_2 1
@@ -54,16 +54,16 @@ int main(void) {
     std::minstd_rand* std_rand = new std::minstd_rand{ std::random_device{}() };
 
     auto const prvEventWaitTask = [](void* pvParameters) {
-        static size_t xInitialTaskNumber{ 2 };
+        static size_t uxInitialTaskNumber{ 2 };
 
-        size_t const xTaskNumber{ xInitialTaskNumber++ };
+        size_t const uxTaskNumber{ uxInitialTaskNumber++ };
         TickType_t const xStartTicks{ xTaskGetTickCount() };
         auto& std_rand{ *reinterpret_cast<std::minstd_rand*>(pvParameters) };
 
         xEventGroupWaitBits(xEventGroup, 1 << 0, pdFALSE, pdFALSE, portMAX_DELAY);
 
         while (true) {
-            uart->print("Task %d has been running for %d ticks\r\n", xTaskNumber, xTaskGetTickCount() - xStartTicks);
+            uart->print("Task %d has been running for %d ticks\r\n", uxTaskNumber, xTaskGetTickCount() - xStartTicks);
             vTaskDelay(std_rand() % (configTICK_RATE_HZ + 1) + configTICK_RATE_HZ);
         }
     };

@@ -16,7 +16,7 @@
 #include <cstring>
 
 #define EX1 0
-#define EX2 0
+#define EX2 1
 #define EX3 1
 
 struct IOTimestamp {
@@ -194,8 +194,8 @@ int main(void) {
 
         char input{ 0 };
         char password{ 0b11110110 };
-        bool changing_password{ false };
-        UBaseType_t count{ 0 };
+        bool isChangingPassword{ false };
+        UBaseType_t uxCount{ 0 };
 
         IOTimestamp previous;
         Board_LED_Set(0, true);
@@ -205,29 +205,29 @@ int main(void) {
             if (current.which == 2) {
                 Board_LED_Set(0, false);
                 Board_LED_Set(2, true);
-                changing_password = true;
-                count = 0;
+                isChangingPassword = true;
+                uxCount = 0;
             } else {
-                if (!changing_password) {
+                if (!isChangingPassword) {
                     if (current.when - previous.when > 15000) // 15,000ms, or 15s
                         input = 0;
 
                     input <<= 1;
                     input |= current.which;
-                    if (++count >= 8 && input == password) {
+                    if (++uxCount >= 8 && input == password) {
                         Board_LED_Set(0, false);
                         Board_LED_Set(1, true);
                         xTimerStart(xDoorLockTimer, 0);
-                        count = 0;
+                        uxCount = 0;
                     }
                 } else {
                     password <<= 1;
                     password |= current.which;
-                    if (++count == 8) {
+                    if (++uxCount == 8) {
                         Board_LED_Set(0, true);
                         Board_LED_Set(2, false);
-                        changing_password = false;
-                        count = 0;
+                        isChangingPassword = false;
+                        uxCount = 0;
                     }
                 }
             }

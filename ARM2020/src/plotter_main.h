@@ -10,22 +10,22 @@
 
 namespace Plotter {
 struct Message {
-	enum Command { MoveLeft, MoveRight, SetPPS };
-	Command command;
-	BaseType_t value;
+    enum Command { MoveLeft, MoveRight, SetPPS };
+    Command command;
+    BaseType_t value;
 };
 
 enum Direction {
-	CounterClockwise = 0, Clockwise
+    CounterClockwise = 0, Clockwise
 };
 
 enum Flag {
-	Go = 1 << 0, CalibratingPPS = 1 << 1, PositionFound = 1 << 2, MaxWidthFound = 1 << 3, Initialised = 1 << 4
+    Go = 1 << 0, CalibratingPPS = 1 << 1, PositionFound = 1 << 2, MaxWidthFound = 1 << 3, Initialised = 1 << 4
 };
 
 void vResume();
 void vStop();
-void vOnXStep();
+void vOnTick();
 BaseType_t xGetPlotterWidth();
 BaseType_t xEnqueueMessage(Message const & message);
 BaseType_t xEnqueueMessage(Message::Command command, BaseType_t value);

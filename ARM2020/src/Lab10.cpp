@@ -17,7 +17,7 @@
 #include <cstring>
 
 #define EX1 0
-#define EX2 0
+#define EX2 1
 #define EX3 1
 
 static void prvSetupHardware() {
@@ -44,7 +44,7 @@ int main(void) {
 
     static QueueWrapper<char const *, 6>* xQueue = new QueueWrapper<char const *, 6>();
 
-    xTimerStart(xTimerCreate("Auto Reload", configTICK_RATE_HZ * 5, pdTRUE, nullptr, [](TimerHandle_t xTimer) { xQueue->push_back("Hello!\r\n"); }), 0);
+    xTimerStart(xTimerCreate("Hello Timer", configTICK_RATE_HZ * 5, pdTRUE, nullptr, [](TimerHandle_t xTimer) { xQueue->push_back("Hello!\r\n"); }), 0);
 
     xTaskCreate([](void* pvParameters) {
         LpcUart uart( { LPC_USART0, 115200, UART_CFG_DATALEN_8 | UART_CFG_PARITY_NONE | UART_CFG_STOPLEN_1, false, { 0, 18 }, { 0, 13 } } );
@@ -55,7 +55,7 @@ int main(void) {
 
     xTaskCreate([](void* pvParameters) {
         static SemaphoreHandle_t xSemaphore = xSemaphoreCreateBinary();
-        xTimerStart(xTimerCreate("One Shot",  configTICK_RATE_HZ * 20, pdFALSE, nullptr, [](TimerHandle_t xTimer) { xSemaphoreGive(xSemaphore); }), 0);
+        xTimerStart(xTimerCreate("Aargh Timer",  configTICK_RATE_HZ * 20, pdFALSE, nullptr, [](TimerHandle_t xTimer) { xSemaphoreGive(xSemaphore); }), 0);
 
         while (true) {
             xSemaphoreTake(xSemaphore, portMAX_DELAY);
@@ -69,7 +69,7 @@ int main(void) {
         Board_LED_Set(1, false);
     });
 
-    auto const callback = [](bool pressed) {
+    auto constexpr callback = [](bool pressed) {
         if (pressed) {
             Board_LED_Set(1, true);
 
@@ -86,31 +86,31 @@ int main(void) {
 #elif EX3
 
     xTaskCreate([](void* pvParameters) {
-        static size_t count{ 0 };
-        static LpcUart* uart = new LpcUart{ { LPC_USART0, 115200, UART_CFG_DATALEN_8 | UART_CFG_PARITY_NONE | UART_CFG_STOPLEN_1, false, { 0, 18 }, { 0, 13 } } };
+        static size_t uxCount{ 0 };
+        static LpcUart uart{ { LPC_USART0, 115200, UART_CFG_DATALEN_8 | UART_CFG_PARITY_NONE | UART_CFG_STOPLEN_1, false, { 0, 18 }, { 0, 13 } } };
         char buffer[60];
-        size_t interval;
+        size_t uxPeriod;
 
-        TimerHandle_t xTimer = xTimerCreate("Green LED Toggle", configTICK_RATE_HZ * 5, pdTRUE, nullptr, [](TimerHandle_t xTimer) {
+        TimerHandle_t xLEDToggleTimer = xTimerCreate("Green LED Toggle", configTICK_RATE_HZ * 5, pdTRUE, nullptr, [](TimerHandle_t xTimer) {
             Board_LED_Toggle(1);
         });
-        xTimerStart(xTimer, 0);
+        xTimerStart(xLEDToggleTimer, 0);
 
         TimerHandle_t xInactivityTimer = xTimerCreate("Inactivity Monitor", configTICK_RATE_HZ * 30, pdFALSE, nullptr, [](TimerHandle_t xTimer) {
-            uart->write("\r\n[Inactive]\r\n");
-            count = 0;
+            uart.write("\r\n[Inactive]\r\n");
+            uxCount = 0;
         });
         xTimerStart(xInactivityTimer, 0);
 
         while (true) {
-            uart->read(&buffer[count], 1, portMAX_DELAY);
+            uart.read(&buffer[uxCount], 1, portMAX_DELAY);
             xTimerReset(xInactivityTimer, 0);
 
-            if (buffer[count] == '\r' || buffer[count] == '\n') {
-                uart->write("\r\n");
-                buffer[count] = '\0';
+            if (buffer[uxCount] == '\r' || buffer[uxCount] == '\n') {
+                uart.write("\r\n");
+                buffer[uxCount] = '\0';
                 if (char* res = strstr(buffer, "help"); res != nullptr) {
-                    uart->write(
+                    uart.write(
                             "[ INSTRUCTIONS ]\r\n"
                             "This program controls the period between LED toggles.\r\n"
                             "To change the period, use the command \"interval <number>\", \r\n"
@@ -118,24 +118,23 @@ int main(void) {
                             "To see when the last toggle occurred, using the command \"time\". \r\n"
                             "The time will be given with a 0.1s accuracy.\r\n");
                 } else if (char* res = strstr(buffer, "interval "); res != nullptr) {
-                    if (sscanf(res + 9, "%d", &interval) == 1)
-                        xTimerChangePeriod(xTimer, interval, 0);
+                    if (sscanf(res + 9, "%d", &uxPeriod) == 1)
+                        xTimerChangePeriod(xLEDToggleTimer, uxPeriod, 0);
                 } else if (char* res = strstr(buffer, "time"); res != nullptr) {
-                    uart->print("Time since last toggle: %0.1fs\r\n", ( xTaskGetTickCount() - xTimerGetExpiryTime(xTimer) + xTimerGetPeriod(xTimer) ) / (float) configTICK_RATE_HZ);
+                    uart.print("Time since last toggle: %0.1fs\r\n", ( xTaskGetTickCount() - xTimerGetExpiryTime(xLEDToggleTimer) + xTimerGetPeriod(xLEDToggleTimer) ) / (float) configTICK_RATE_HZ);
                 }
-                count = 0;
-            }
-            else {
-                uart->write(buffer[count]);
-                if (buffer[count] == 127 && count != 0)  // "Backspace", encoded as DEL by Putty
-                    --count;
-                else if (++count == 60) {
-                    count = 0;
-                    uart->write("\r\nBuffer full!\r\n");
+                uxCount = 0;
+            } else {
+                uart.write(buffer[uxCount]);
+                if (buffer[uxCount] == 127 && uxCount != 0)  // "Backspace", encoded as DEL by Putty
+                    --uxCount;
+                else if (++uxCount == 60) {
+                    uxCount = 0;
+                    uart.write("\r\nBuffer full!\r\n");
                 }
             }
         }
-    }, "Task 1", configMINIMAL_STACK_SIZE + 256, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
+    }, "Task 1", 280, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 
 #endif
 
