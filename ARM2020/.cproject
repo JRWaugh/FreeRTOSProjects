@@ -137,7 +137,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="Lab7.cpp|Lab10.cpp|Lab9.cpp|Lab4.cpp|Lab3.cpp|Lab2.cpp|Lab1.cpp|xy_plotter.cpp|Lab6.cpp|plotter_main.cpp" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
+						<entry excluding="Lab8.cpp|Lab7.cpp|Lab10.cpp|Lab9.cpp|Lab4.cpp|Lab3.cpp|Lab2.cpp|Lab1.cpp|Lab6.cpp|plotter_main.cpp" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -273,7 +273,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="Lab7.cpp|Lab10.cpp|Lab9.cpp|Lab4.cpp|Lab3.cpp|Lab2.cpp|Lab1.cpp|xy_plotter.cpp|Lab6.cpp|plotter_main.cpp" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
+						<entry excluding="Lab8.cpp|Lab7.cpp|Lab10.cpp|Lab9.cpp|Lab4.cpp|Lab3.cpp|Lab2.cpp|Lab1.cpp|Lab6.cpp|plotter_main.cpp" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

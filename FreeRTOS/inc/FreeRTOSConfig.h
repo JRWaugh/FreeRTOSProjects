@@ -69,6 +69,7 @@
 #define configQUEUE_REGISTRY_SIZE		10
 #define configGENERATE_RUN_TIME_STATS	1
 #define configUSE_MALLOC_FAILED_HOOK	1
+#define configUSE_TRACE_FACILITY        1
     
 /* Software timer related definitions. */
 #define configUSE_TIMERS                        1
@@ -96,6 +97,8 @@ to exclude the API function. */
 #define INCLUDE_vTaskDelay					1
 #define INCLUDE_uxTaskGetStackHighWaterMark	1
 #define INCLUDE_eTaskGetState				1
+#define INCLUDE_xTimerPendFunctionCall      1
+
 
 /* The following gives two altenatives for collecting runtime statistics
  * - Extremely accurate timing using CPU core for short time statistics

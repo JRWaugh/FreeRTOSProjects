@@ -16,20 +16,20 @@
 #include "user_vcom.h"
 
 static size_t constexpr kTicksPerSecond{ 1'000'000 }, kPenFrequency{ 50 }, kPenPeriod{ kTicksPerSecond / kPenFrequency };
-static size_t xPlotterWidth{ 150 }, xPlotterHeight{ 100 };
-static uint8_t penUp{ 160 }, penDown{ 90 }, speed{ 80 };
+static size_t uxPlotterWidth{ 150 }, uxPlotterHeight{ 100 };
+static uint8_t ucPenUp{ 160 }, ucPenDown{ 90 }, ucSpeed{ 80 };
 static Axis* X, * Y;
 
-static void prvSetPenPosition(uint8_t penPosition) {
-    static constexpr size_t kMinDutyCycle{ kPenPeriod / 20 }, kMaxDutyCycle{ kMinDutyCycle * 2 }, kDelta{ kMaxDutyCycle - kMinDutyCycle };
+static void prvSetPenPosition(uint8_t ucPenPosition) {
+    static constexpr size_t kMinDutyCycle{ kPenPeriod / 20 }, kMaxDutyCycle{ kPenPeriod / 10 }, kDelta{ kMaxDutyCycle - kMinDutyCycle };
 
-    LPC_SCT0->MATCHREL[1].U = kMinDutyCycle + kDelta * penPosition / 255;
+    LPC_SCT0->MATCHREL[1].U = kMinDutyCycle + kDelta * ucPenPosition / 255;
     LPC_SCT0->OUT[0].SET = 1 << 0;
 }
 
-static void prvSetLaserPower(uint8_t laserPower) {
-    LPC_SCT0->MATCHREL[3].U = laserPower;
-    LPC_SCT0->OUT[1].SET = laserPower > 0 ? 1 << 2 : 0; // Disable output if pulse width is 0
+static void prvSetLaserPower(uint8_t ucLaserPower) {
+    LPC_SCT0->MATCHREL[3].U = ucLaserPower;
+    LPC_SCT0->OUT[1].SET = ucLaserPower > 0 ? 1 << 2 : 0; // Disable output if pulse width is 0
 }
 
 static void prvSetupHardware() {
@@ -49,7 +49,7 @@ static void prvSetupHardware() {
     LPC_SCT0->EVENT[0].CTRL = 0 << 0 | 1 << 12;
     LPC_SCT0->EVENT[1].CTRL = 1 << 0 | 1 << 12;
     LPC_SCT0->OUT[0].CLR = 1 << 1;
-    prvSetPenPosition(penUp);
+    prvSetPenPosition(ucPenUp);
     Chip_SWM_MovablePortPinAssign(SWM_SCT0_OUT0_O, 0, 10);
 
     // SCTimer config for laser.
@@ -98,7 +98,7 @@ int main(void) {
     prvSetupHardware();
 
     X = new Axis{
-        xPlotterWidth,
+        uxPlotterWidth,
         { { 0, 24 }, false, false, false },
         { { 1,  0 }, false, false, false },
         { { 0,  9 }, true, true, true },
@@ -113,7 +113,7 @@ int main(void) {
     };
 
     Y = new Axis{
-        xPlotterHeight,
+        uxPlotterHeight,
         { { 0, 27 }, false, false, false },
         { { 0, 28 }, false, false, false },
         { { 0,  0 }, true, true, true },
@@ -127,35 +127,55 @@ int main(void) {
         }
     };
 
+    DigitalIOPin* ioButtonResume = new DigitalIOPin{ { 0, 8 }, true, true, true, PIN_INT0_IRQn, [](bool pressed) {
+        if (pressed) {
+            if (X != nullptr)
+                X->resume();
+
+            if (Y != nullptr)
+                Y->resume();
+        }
+    }};
+
+    DigitalIOPin* ioButtonHalt = new DigitalIOPin{ { 1, 6 }, true, true, true, PIN_INT1_IRQn, [](bool pressed) {
+        if (pressed) {
+            if (X != nullptr)
+                X->halt();
+
+            if (Y != nullptr)
+                Y->halt();
+        }
+    }};
+
     xTaskCreate([](void* pvParameters) {
         static auto constexpr MalformedCode = "Malformed code\r\n", UnknownCode = "Unknown code\r\n", OK = "OK\r\n";
         enum { G1 = 'G' + 1, G28 = 'G' + 28, M1 = 'M' + 1, M2 = 'M' + 2, M4 = 'M' + 4, M5 = 'M' + 5, M10 = 'M' + 10, M11 = 'M' + 11 };
-        float x, y;
-        uint8_t moveIsRelative, toolPulseWidth;
-        char buffer[RCV_BUFSIZE];
+        float fX, fY;
+        uint8_t isRelative, ucPulseWidth;
+        char pcBuffer[RCV_BUFSIZE];
 
         while (true) {
-            USB_receive(buffer, RCV_BUFSIZE);
+            USB_receive(pcBuffer, RCV_BUFSIZE);
 
-            ITM_write(buffer);
+            ITM_write(pcBuffer);
 
-            auto const letter = buffer[0];
-            auto const number = std::atoi(buffer + 1);
+            auto const letter = pcBuffer[0];
+            auto const number = std::atoi(pcBuffer + 1);
 
             switch (letter + number) {
             case G1: // Command from mDraw to move to X/Y co-ordinate
-                if (std::sscanf(buffer + 3, "X%f Y%f A%hhu", &x, &y, &moveIsRelative) == 3) {
-                    if (moveIsRelative) {
-                        if (std::abs(x) < std::abs(y)) {
-                            X->enqueueMove({ Axis::Move::Relative, x, std::abs(x) * Axis::kMaximumPPS / std::abs(y) });
-                            Y->enqueueMove({ Axis::Move::Relative, y, Axis::kMaximumPPS });
+                if (std::sscanf(pcBuffer + 3, "X%f Y%f A%hhu", &fX, &fY, &isRelative) == 3) {
+                    if (isRelative) {
+                        if (std::abs(fX) < std::abs(fY)) {
+                            X->enqueueMove({ Axis::Move::Relative, fX, std::abs(fX) * Axis::kMaximumPPS / std::abs(fY) });
+                            Y->enqueueMove({ Axis::Move::Relative, fY, Axis::kMaximumPPS });
                         } else {
-                            X->enqueueMove({ Axis::Move::Relative, x, Axis::kMaximumPPS });
-                            Y->enqueueMove({ Axis::Move::Relative, y, std::abs(y) * Axis::kMaximumPPS / std::abs(x) });
+                            X->enqueueMove({ Axis::Move::Relative, fX, Axis::kMaximumPPS });
+                            Y->enqueueMove({ Axis::Move::Relative, fY, std::abs(fY) * Axis::kMaximumPPS / std::abs(fX) });
                         }
                     } else {
-                        X->enqueueMove({ Axis::Move::Absolute, x, Axis::kMaximumPPS });
-                        Y->enqueueMove({ Axis::Move::Absolute, y, Axis::kMaximumPPS });
+                        X->enqueueMove({ Axis::Move::Absolute, fX, Axis::kMaximumPPS });
+                        Y->enqueueMove({ Axis::Move::Absolute, fY, Axis::kMaximumPPS });
                     }
                 }
                 else
@@ -168,9 +188,9 @@ int main(void) {
                 break;
 
             case M1: // Command from mDraw to set pen position
-                if (std::sscanf(buffer + 3, "%hhu", &toolPulseWidth) == 1) {
+                if (std::sscanf(pcBuffer + 3, "%hhu", &ucPulseWidth) == 1) {
                     while (LPC_SCT2->EVENT[0].STATE || LPC_SCT2->EVENT[1].STATE); // Poll until the steppers have stopped and they set their STATE registers to 0.
-                    prvSetPenPosition(toolPulseWidth);
+                    prvSetPenPosition(ucPulseWidth);
                 } else
                     ITM_write(MalformedCode);
                 break;
@@ -178,9 +198,9 @@ int main(void) {
             case M2: { // Command from mDraw to save pen up and pen down positions
                 uint8_t tempUp{ 0 }, tempDown{ 0 };
 
-                if (std::sscanf(buffer + 3, "U%hhu D%hhu", &tempUp, &tempDown) == 2) {
-                    penUp = tempUp;
-                    penDown = tempDown;
+                if (std::sscanf(pcBuffer + 3, "U%hhu D%hhu", &tempUp, &tempDown) == 2) {
+                    ucPenUp = tempUp;
+                    ucPenDown = tempDown;
                 }
                 else
                     ITM_write(MalformedCode);
@@ -188,37 +208,34 @@ int main(void) {
             }
 
             case M4: // Command from mDraw to set laser power
-                if (std::sscanf(buffer + 3, "%hhu", &toolPulseWidth) == 1) {
+                if (std::sscanf(pcBuffer + 3, "%hhu", &ucPulseWidth) == 1) {
                     while (LPC_SCT2->EVENT[0].STATE || LPC_SCT2->EVENT[1].STATE); // Poll until the steppers have stopped and they set their STATE registers to 0.
-                    prvSetLaserPower(toolPulseWidth);
-                    if (toolPulseWidth == 0)
+                    prvSetLaserPower(ucPulseWidth);
+                    if (ucPulseWidth == 0)
                         vTaskDelay(200); // Simulator takes a bit to realise we've stopped the laser.
                 } else
                     ITM_write(MalformedCode);
                 break;
 
             case M5: {
-                uint8_t tempXDir{ 0 }, tempYDir{ 0 }, tempSpeed{ 0 };
-                uint32_t tempHeight{ 0 }, tempWidth{ 0 };
-
-                if (std::sscanf(buffer + 3, "A%c B%c H%ld W%ld S%hhu", &tempXDir, &tempYDir, &tempHeight, &tempWidth, &tempSpeed) == 5) {
-                    xPlotterHeight = tempHeight;
-                    xPlotterWidth = tempWidth;
-                    speed = tempSpeed;
-                }
-                else
+                uint8_t ucDirX{ 0 }, ucDirY{ 0 }; // Discarding these values for now. It's not like we're saving any of these values to flash anyway.
+                if (std::sscanf(pcBuffer + 3, "A%hhu B%hhu H%u W%u S%hhu", &ucDirX, &ucDirY, &uxPlotterHeight, &uxPlotterWidth, &ucSpeed) != 5)
                     ITM_write(MalformedCode);
                 break;
             }
 
-            case M10: // Query from mDraw for width, height, origin point, speed, pen up and pen down positions
-                sprintf(buffer, "M10 XY %d %d 0.00 0.00 A%d B%d S%d H0 U%d D%d\r\n", xPlotterWidth, xPlotterHeight, Axis::kTowardsOrigin, Axis::kTowardsOrigin, speed, penUp, penDown);
-                USB_send(buffer, strlen(buffer));
+            case M10: // Query from mDraw for width, height, origin point, ucSpeed, pen up and pen down positions
+                sprintf(pcBuffer,
+                        "M10 XY %u %u 0.00 0.00 A%d B%d S%hhu H0 U%hhu D%hhu\r\n",
+                        uxPlotterWidth, uxPlotterHeight, Axis::kTowardsOrigin, Axis::kTowardsOrigin, ucSpeed, ucPenUp, ucPenDown);
+                USB_send(pcBuffer, strlen(pcBuffer));
                 break;
 
             case M11: // Query from mDraw for limit switch states
-                sprintf(buffer, "M11 %hhu %hhu %hhu %hhu", !X->originSWPressed(), !X->limitSWPressed(), !Y->originSWPressed(), Y->limitSWPressed());
-                USB_send(buffer, strlen(buffer));
+                sprintf(pcBuffer,
+                        "M11 %hhu %hhu %hhu %hhu",
+                        !X->readOriginSwitch(), !X->readLimitSwitch(), !Y->readOriginSwitch(), Y->readLimitSwitch());
+                USB_send(pcBuffer, strlen(pcBuffer));
                 break;
 
             default:
@@ -233,4 +250,7 @@ int main(void) {
     xTaskCreate(cdc_task, "CDC", configMINIMAL_STACK_SIZE, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 
     vTaskStartScheduler();
+
+    delete ioButtonResume;
+    delete ioButtonHalt;
 }

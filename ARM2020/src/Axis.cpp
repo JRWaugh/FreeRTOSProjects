@@ -6,8 +6,11 @@
  */
 
 #include <Axis.h>
-#include "event_groups.h"
 #include <cmath>
+
+[[nodiscard]] static bool isInterrupt() {
+    return SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk;
+}
 
 Axis::Axis(	size_t xSizeInMM,
         DigitalIOPin&& ioStep,
@@ -16,7 +19,7 @@ Axis::Axis(	size_t xSizeInMM,
         DigitalIOPin&& ioLimitSW,
         StepStarter_t start,
         StepStopper_t stop
-) : xSizeInMM{ xSizeInMM }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, start{ start }, stop{ stop } {
+) : xSizeInMM{ xSizeInMM }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, startStepping{ start }, stopStepping{ stop } {
     ioStep.write(true);
     xTaskCreate(prvAxisTask, nullptr, 70, this, tskIDLE_PRIORITY + 1UL, &xTaskHandle);
 }
@@ -24,65 +27,85 @@ Axis::Axis(	size_t xSizeInMM,
 Axis::~Axis() {
     vTaskDelete(xTaskHandle);
     vSemaphoreDelete(xMoveComplete);
+    vEventGroupDelete(xEventGroup);
 }
 
-void Axis::startMove(bool bIsRelative, int32_t xStepsToMove, float fStepsPerSecond) {
-    if (!bIsRelative)
+void Axis::move(bool isRelative, int32_t xStepsToMove, float fStepsPerSecond) {
+    xEventGroupWaitBits(xEventGroup, uxEnableBit, pdFALSE, pdTRUE, portMAX_DELAY);
+
+    if (!isRelative)
         xStepsToMove -= xCurrentPosition;
 
     if (xStepsToMove == 0)
         return;
     else if (xStepsToMove > 0)
-        setDirection(kTowardsLimit);
+        ioDirection.write(kTowardsLimit);
     else if (xStepsToMove < 0)
-        setDirection(kTowardsOrigin);
-
+        ioDirection.write(kTowardsOrigin);
     xStepsRemaining = abs(xStepsToMove);
-    start(fStepsPerSecond);
+    startStepping(fStepsPerSecond);
+
     xSemaphoreTake(xMoveComplete, portMAX_DELAY);
-}
-
-void Axis::endMove() {
-    stop();
-
-    portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-    xSemaphoreGiveFromISR(xMoveComplete, &xHigherPriorityWoken);
-    portEND_SWITCHING_ISR(xHigherPriorityWoken);
 }
 
 void Axis::step() {
     ioStep.write(false);
 
     --xStepsRemaining;
-    Direction direction = this->getDirection();
+    auto const direction = ioDirection.read();
 
     if (direction == kTowardsOrigin) {
         --xCurrentPosition;
         if (ioOriginSW.read()) {
             if (xMaximumPosition == kPositionUnknown)
                 xCurrentPosition = 0;
-            endMove();
-        } else if (!xStepsRemaining)
-            endMove();
+            onMoveComplete();
+        } else if (xStepsRemaining == 0)
+            onMoveComplete();
     } else if (direction == kTowardsLimit) {
         ++xCurrentPosition;
 
         if (ioLimitSW.read()) {
             if (xMaximumPosition == kPositionUnknown)
                 xMaximumPosition = xCurrentPosition.load() - 1;
-            endMove();
-        } else if (!xStepsRemaining)
-            endMove();
+            onMoveComplete();
+        } else if (xStepsRemaining == 0)
+            onMoveComplete();
     }
 
     ioStep.write(true);
 }
 
-bool Axis::originSWPressed() {
+void Axis::halt() {
+    if (!isInterrupt())
+        xEventGroupClearBits(xEventGroup, uxEnableBit);
+    else
+        xEventGroupClearBitsFromISR(xEventGroup, uxEnableBit);
+}
+
+void Axis::resume() {
+    if (!isInterrupt())
+        xEventGroupSetBits(xEventGroup, uxEnableBit);
+    else {
+        portBASE_TYPE xHigherPriorityWoken = pdFALSE;
+        xEventGroupSetBitsFromISR(xEventGroup, uxEnableBit, &xHigherPriorityWoken);
+        portEND_SWITCHING_ISR(xHigherPriorityWoken);
+    }
+}
+
+void Axis::onMoveComplete() {
+    stopStepping();
+
+    portBASE_TYPE xHigherPriorityWoken = pdFALSE;
+    xSemaphoreGiveFromISR(xMoveComplete, &xHigherPriorityWoken);
+    portEND_SWITCHING_ISR(xHigherPriorityWoken);
+}
+
+bool Axis::readOriginSwitch() {
     return ioOriginSW.read();
 }
 
-bool Axis::limitSWPressed() {
+bool Axis::readLimitSwitch() {
     return ioLimitSW.read();
 }
 
@@ -95,38 +118,25 @@ BaseType_t Axis::enqueueMove(Move const & message) {
 }
 
 float Axis::calibrateStepsPerMM() {
-    startMove(Move::Relative, INT32_MIN);
-    startMove(Move::Relative, INT32_MAX);
-    startMove(Move::Absolute, 0);
+    move(Move::Relative, INT32_MIN);
+    move(Move::Relative, INT32_MAX);
+    move(Move::Absolute, 0);
 
     return static_cast<float>(xMaximumPosition) / xSizeInMM;
-}
-
-void Axis::setDirection(Direction direction) {
-    ioDirection.write(direction);
-}
-
-[[nodiscard]] Axis::Direction Axis::getDirection() const {
-    return static_cast<Direction>(ioDirection.read());
 }
 
 void Axis::prvAxisTask(void* pvParameters) {
     static EventGroupHandle_t xEventGroup{ xEventGroupCreate() };
     static EventBits_t uxBitsToWaitFor{ 0 };
-    static size_t xTasksCreated{ 0 };
-    size_t xTaskID = xTasksCreated++;
-    uxBitsToWaitFor = (uxBitsToWaitFor << 1) | 1;
+    static size_t uxTasksCreated{ 0 };
+    size_t uxTaskID = uxTasksCreated++;
+    uxBitsToWaitFor = uxBitsToWaitFor << 1 | 1;
     Axis& axis = *reinterpret_cast<Axis*>(pvParameters);
-
-    vTaskDelay(10); // Let pins stabilise
-
-    while (axis.originSWPressed() && axis.limitSWPressed());
-
     float const fStepsPerMM = axis.calibrateStepsPerMM();
 
     while (true) {
         Move move = axis.dequeueMove();
-        xEventGroupSync(xEventGroup, 1 << xTaskID, uxBitsToWaitFor, portMAX_DELAY);
-        axis.startMove(move.isRelative, move.fDistanceInMM * fStepsPerMM, move.xStepsPerSecond);
+        xEventGroupSync(xEventGroup, 1 << uxTaskID, uxBitsToWaitFor, portMAX_DELAY);
+        axis.move(move.isRelative, move.fDistanceInMM * fStepsPerMM, move.xStepsPerSecond);
     }
 }
