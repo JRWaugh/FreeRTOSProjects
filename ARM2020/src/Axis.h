@@ -15,8 +15,8 @@
 #include "event_groups.h"
 #include "QueueWrapper.h"
 
-using StepStarter_t = void (*)(float);
-using StepStopper_t = void (*)();
+using StepEnableCallback = void (*)(float);
+using StepDisableCallback = void (*)();
 
 class Axis {
 public:
@@ -28,17 +28,16 @@ public:
     };
 
     enum Direction { Clockwise = 0, CounterClockwise };
-
-    static constexpr Direction kTowardsOrigin{ Clockwise };
     static constexpr size_t kMaximumPPS{ 2000 };
 
-    Axis(   size_t xSizeInMM,
+    Axis(   size_t uxSizeInMM,
+            uint8_t ucOriginDirection,
             DigitalIOPin&& ioStep,
             DigitalIOPin&& ioDirection,
             DigitalIOPin&& ioOriginSW,
             DigitalIOPin&& ioLimitSW,
-            StepStarter_t,
-            StepStopper_t
+            StepEnableCallback,
+            StepDisableCallback
     );
 
     ~Axis();
@@ -49,23 +48,37 @@ public:
     void resume();
     [[nodiscard]] bool readOriginSwitch();
     [[nodiscard]] bool readLimitSwitch();
+    [[nodiscard]] float getStepsPerMM() const {
+        return fStepsPerMM;
+    }
+
+    void onNewConfiguration(size_t uxSizeInMM, uint8_t ucOriginDirection) {
+        this->uxSizeInMM = uxSizeInMM;
+        if (this->ucOriginDirection != ucOriginDirection) {
+            xCurrentPosition = xMaximumPosition - xCurrentPosition;
+        }
+        this->ucOriginDirection = ucOriginDirection;
+        enqueueMove({ Axis::Move::Absolute, 0, Axis::kMaximumPPS });
+    }
+
     BaseType_t enqueueMove(Move const & message);
     [[nodiscard]] Move dequeueMove();
-    float calibrateStepsPerMM();
+    void calibrate();
 
 private:
     static constexpr int32_t kPositionUnknown{ -1 };
-    static constexpr Direction kTowardsLimit{ static_cast<Direction>(!kTowardsOrigin) };
     static constexpr EventBits_t uxEnableBit = 1 << 0;
     static void prvAxisTask(void* pvParameters);
 
     void onMoveComplete();
 
-    size_t const xSizeInMM;
+    size_t uxSizeInMM;
+    uint8_t ucOriginDirection;
     DigitalIOPin ioStep, ioDirection, ioOriginSW, ioLimitSW;
-    StepStarter_t startStepping;
-    StepStopper_t stopStepping;
+    StepEnableCallback startStepping;
+    StepDisableCallback stopStepping;
     std::atomic<int32_t> xStepsRemaining{ 0 }, xCurrentPosition{ 0 }, xMaximumPosition{ kPositionUnknown };
+    float fStepsPerMM;
 
     EventGroupHandle_t xEventGroup{ xEventGroupCreate() };
     SemaphoreHandle_t xMoveComplete{ xSemaphoreCreateBinary() };

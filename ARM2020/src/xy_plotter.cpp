@@ -16,9 +16,38 @@
 #include "user_vcom.h"
 
 static size_t constexpr kTicksPerSecond{ 1'000'000 }, kPenFrequency{ 50 }, kPenPeriod{ kTicksPerSecond / kPenFrequency };
-static size_t uxPlotterWidth{ 150 }, uxPlotterHeight{ 100 };
-static uint8_t ucPenUp{ 160 }, ucPenDown{ 90 }, ucSpeed{ 80 };
 static Axis* X, * Y;
+struct {
+    uint32_t uxPlotterHeight;
+    uint32_t uxPlotterWidth;
+    uint8_t ucDirX;
+    uint8_t ucDirY;
+    uint8_t ucSpeed;
+    uint8_t ucPenUp;
+    uint8_t ucPenDown;
+    char ucPadding[3];
+    uint8_t save() {
+        strcpy(ucPadding, "XY");
+        return Chip_EEPROM_Write(0x100, (uint8_t*) this, 16);
+    }
+
+    void load() {
+        Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_EEPROM);
+        Chip_SYSCTL_PeriphReset(RESET_EEPROM);
+
+        if (Chip_EEPROM_Read(0x100, (uint8_t*) this, 16) == IAP_CMD_SUCCESS) {
+            if (strcmp(ucPadding, "XY") != 0) {
+                uxPlotterHeight = 380;
+                uxPlotterWidth = 310;
+                ucDirX = Axis::Clockwise;
+                ucDirY = Axis::Clockwise;
+                ucSpeed = 50;
+                ucPenUp = 160;
+                ucPenDown = 90;
+            }
+        }
+    }
+} static PlotterConfig;
 
 static void prvSetPenPosition(uint8_t ucPenPosition) {
     static constexpr size_t kMinDutyCycle{ kPenPeriod / 20 }, kMaxDutyCycle{ kPenPeriod / 10 }, kDelta{ kMaxDutyCycle - kMinDutyCycle };
@@ -37,6 +66,7 @@ static void prvSetupHardware() {
     Board_Init();
     heap_monitor_setup();
     ITM_init();
+    PlotterConfig.load();
 
     Chip_SCT_Init(LPC_SCT0);
     Chip_SCT_Init(LPC_SCT2);
@@ -49,7 +79,7 @@ static void prvSetupHardware() {
     LPC_SCT0->EVENT[0].CTRL = 0 << 0 | 1 << 12;
     LPC_SCT0->EVENT[1].CTRL = 1 << 0 | 1 << 12;
     LPC_SCT0->OUT[0].CLR = 1 << 1;
-    prvSetPenPosition(ucPenUp);
+    prvSetPenPosition(PlotterConfig.ucPenUp);
     Chip_SWM_MovablePortPinAssign(SWM_SCT0_OUT0_O, 0, 10);
 
     // SCTimer config for laser.
@@ -97,33 +127,38 @@ void SCT2_IRQHandler(void) {
 int main(void) {
     prvSetupHardware();
 
+    auto& kXAxisEnable = LPC_SCT2->EVENT[0].STATE;
+    auto& kYAxisEnable = LPC_SCT2->EVENT[1].STATE;
+
     X = new Axis{
-        uxPlotterWidth,
+        PlotterConfig.uxPlotterWidth,
+        PlotterConfig.ucDirX,
         { { 0, 24 }, false, false, false },
         { { 1,  0 }, false, false, false },
         { { 0,  9 }, true, true, true },
         { { 0, 29 }, true, true, true },
         [](float stepsPerSecond) {
             LPC_SCT2->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
-            LPC_SCT2->EVENT[0].STATE = 1;
+            kXAxisEnable = true;
         },
         []() {
-            LPC_SCT2->EVENT[0].STATE = 0;
+            kXAxisEnable = false;
         }
     };
 
     Y = new Axis{
-        uxPlotterHeight,
+        PlotterConfig.uxPlotterHeight,
+        PlotterConfig.ucDirY,
         { { 0, 27 }, false, false, false },
         { { 0, 28 }, false, false, false },
         { { 0,  0 }, true, true, true },
         { { 1,  3 }, true, true, true },
         [](float stepsPerSecond) {
             LPC_SCT2->MATCHREL[1].U = kTicksPerSecond / stepsPerSecond - 1;
-            LPC_SCT2->EVENT[1].STATE = 1;
+            kYAxisEnable = true;
         },
         []() {
-            LPC_SCT2->EVENT[1].STATE = 0;
+            kYAxisEnable = false;
         }
     };
 
@@ -156,7 +191,6 @@ int main(void) {
 
         while (true) {
             USB_receive(pcBuffer, RCV_BUFSIZE);
-
             ITM_write(pcBuffer);
 
             auto const letter = pcBuffer[0];
@@ -187,29 +221,32 @@ int main(void) {
                 Y->enqueueMove({ Axis::Move::Absolute, 0, Axis::kMaximumPPS });
                 break;
 
-            case M1: // Command from mDraw to set pen position
+            case M1: // Command from mDraw to SET pen position
                 if (std::sscanf(pcBuffer + 3, "%hhu", &ucPulseWidth) == 1) {
-                    while (LPC_SCT2->EVENT[0].STATE || LPC_SCT2->EVENT[1].STATE); // Poll until the steppers have stopped and they set their STATE registers to 0.
+                    while (kXAxisEnable || kYAxisEnable);
+
                     prvSetPenPosition(ucPulseWidth);
                 } else
                     ITM_write(MalformedCode);
                 break;
 
-            case M2: { // Command from mDraw to save pen up and pen down positions
-                uint8_t tempUp{ 0 }, tempDown{ 0 };
+            case M2: { // Command from mDraw to SAVE pen up and pen down positions
+                uint8_t ucPenUp{ 0 }, ucPenDown{ 0 };
 
-                if (std::sscanf(pcBuffer + 3, "U%hhu D%hhu", &tempUp, &tempDown) == 2) {
-                    ucPenUp = tempUp;
-                    ucPenDown = tempDown;
+                if (std::sscanf(pcBuffer + 3, "U%hhu D%hhu", &ucPenUp, &ucPenDown) == 2) {
+                    PlotterConfig.ucPenUp = ucPenUp;
+                    PlotterConfig.ucPenDown = ucPenDown;
+                    PlotterConfig.save();
                 }
                 else
                     ITM_write(MalformedCode);
                 break;
             }
 
-            case M4: // Command from mDraw to set laser power
+            case M4: // Command from mDraw to SET laser power
                 if (std::sscanf(pcBuffer + 3, "%hhu", &ucPulseWidth) == 1) {
-                    while (LPC_SCT2->EVENT[0].STATE || LPC_SCT2->EVENT[1].STATE); // Poll until the steppers have stopped and they set their STATE registers to 0.
+                    while (kXAxisEnable || kYAxisEnable);
+
                     prvSetLaserPower(ucPulseWidth);
                     if (ucPulseWidth == 0)
                         vTaskDelay(200); // Simulator takes a bit to realise we've stopped the laser.
@@ -217,17 +254,31 @@ int main(void) {
                     ITM_write(MalformedCode);
                 break;
 
-            case M5: {
-                uint8_t ucDirX{ 0 }, ucDirY{ 0 }; // Discarding these values for now. It's not like we're saving any of these values to flash anyway.
-                if (std::sscanf(pcBuffer + 3, "A%hhu B%hhu H%u W%u S%hhu", &ucDirX, &ucDirY, &uxPlotterHeight, &uxPlotterWidth, &ucSpeed) != 5)
+            case M5: { // Command from mDraw to SAVE plotter configuration
+                uint32_t uxPlotterHeight, uxPlotterWidth;
+                uint8_t ucDirX, ucDirY, ucSpeed;
+
+                if (std::sscanf(pcBuffer + 3, "A%hhu B%hhu H%lu W%lu S%hhu", &ucDirX, &ucDirY, &uxPlotterHeight, &uxPlotterWidth, &ucSpeed) == 5) {
+                    PlotterConfig.ucDirX = ucDirX;
+                    PlotterConfig.ucDirY = ucDirY;
+                    PlotterConfig.uxPlotterHeight = uxPlotterHeight;
+                    PlotterConfig.uxPlotterWidth = uxPlotterWidth;
+                    PlotterConfig.ucSpeed = ucSpeed;
+                    PlotterConfig.save();
+
+                    X->onNewConfiguration(uxPlotterWidth, ucDirX);
+                    Y->onNewConfiguration(uxPlotterHeight, ucDirY);
+                } else
                     ITM_write(MalformedCode);
                 break;
             }
 
             case M10: // Query from mDraw for width, height, origin point, ucSpeed, pen up and pen down positions
                 sprintf(pcBuffer,
-                        "M10 XY %u %u 0.00 0.00 A%d B%d S%hhu H0 U%hhu D%hhu\r\n",
-                        uxPlotterWidth, uxPlotterHeight, Axis::kTowardsOrigin, Axis::kTowardsOrigin, ucSpeed, ucPenUp, ucPenDown);
+                        "M10 XY %lu %lu 0.00 0.00 A%hhu B%hhu S%hhu H0 U%hhu D%hhu\r\n",
+                        PlotterConfig.uxPlotterWidth, PlotterConfig.uxPlotterHeight,
+                        PlotterConfig.ucDirX, PlotterConfig.ucDirY, PlotterConfig.ucSpeed,
+                        PlotterConfig.ucPenUp, PlotterConfig.ucPenDown);
                 USB_send(pcBuffer, strlen(pcBuffer));
                 break;
 

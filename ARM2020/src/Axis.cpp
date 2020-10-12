@@ -12,20 +12,25 @@
     return SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk;
 }
 
-Axis::Axis(	size_t xSizeInMM,
+Axis::Axis(	size_t uxSizeInMM,
+        uint8_t ucOriginDirection,
         DigitalIOPin&& ioStep,
         DigitalIOPin&& ioDirection,
         DigitalIOPin&& ioOriginSW,
         DigitalIOPin&& ioLimitSW,
-        StepStarter_t start,
-        StepStopper_t stop
-) : xSizeInMM{ xSizeInMM }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, startStepping{ start }, stopStepping{ stop } {
+        StepEnableCallback start,
+        StepDisableCallback stop
+) :
+        uxSizeInMM{ uxSizeInMM }, ucOriginDirection{ ucOriginDirection },
+        ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW },
+        startStepping{ start }, stopStepping{ stop } {
     ioStep.write(true);
     xTaskCreate(prvAxisTask, nullptr, 70, this, tskIDLE_PRIORITY + 1UL, &xTaskHandle);
 }
 
 Axis::~Axis() {
-    vTaskDelete(xTaskHandle);
+    onMoveComplete();
+    vTaskDelete(xTaskHandle); // Will still have a memory leak because of the event group allocated in prvAsixTask, but oh well!
     vSemaphoreDelete(xMoveComplete);
     vEventGroupDelete(xEventGroup);
 }
@@ -39,9 +44,9 @@ void Axis::move(bool isRelative, int32_t xStepsToMove, float fStepsPerSecond) {
     if (xStepsToMove == 0)
         return;
     else if (xStepsToMove > 0)
-        ioDirection.write(kTowardsLimit);
+        ioDirection.write(!ucOriginDirection);
     else if (xStepsToMove < 0)
-        ioDirection.write(kTowardsOrigin);
+        ioDirection.write(ucOriginDirection);
     xStepsRemaining = abs(xStepsToMove);
     startStepping(fStepsPerSecond);
 
@@ -54,18 +59,19 @@ void Axis::step() {
     --xStepsRemaining;
     auto const direction = ioDirection.read();
 
-    if (direction == kTowardsOrigin) {
+    if (direction == ucOriginDirection) {
         --xCurrentPosition;
-        if (ioOriginSW.read()) {
+        bool const isPressed = ucOriginDirection == Clockwise ? readOriginSwitch() : readLimitSwitch();
+        if (isPressed) {
             if (xMaximumPosition == kPositionUnknown)
                 xCurrentPosition = 0;
             onMoveComplete();
         } else if (xStepsRemaining == 0)
             onMoveComplete();
-    } else if (direction == kTowardsLimit) {
+    } else {
         ++xCurrentPosition;
-
-        if (ioLimitSW.read()) {
+        bool const isPressed = ucOriginDirection == Clockwise ? readLimitSwitch() : readOriginSwitch();
+        if (isPressed) {
             if (xMaximumPosition == kPositionUnknown)
                 xMaximumPosition = xCurrentPosition.load() - 1;
             onMoveComplete();
@@ -117,26 +123,27 @@ BaseType_t Axis::enqueueMove(Move const & message) {
     return xMoveQueue.pop_front();
 }
 
-float Axis::calibrateStepsPerMM() {
+void Axis::calibrate() {
     move(Move::Relative, INT32_MIN);
     move(Move::Relative, INT32_MAX);
     move(Move::Absolute, 0);
-
-    return static_cast<float>(xMaximumPosition) / xSizeInMM;
+    fStepsPerMM = static_cast<float>(xMaximumPosition) / uxSizeInMM;
 }
 
 void Axis::prvAxisTask(void* pvParameters) {
-    static EventGroupHandle_t xEventGroup{ xEventGroupCreate() };
+    static EventGroupHandle_t xEventGroup{ xEventGroupCreate() }; // This will cause a leak when Axis is deleted.
     static EventBits_t uxBitsToWaitFor{ 0 };
     static size_t uxTasksCreated{ 0 };
-    size_t uxTaskID = uxTasksCreated++;
-    uxBitsToWaitFor = uxBitsToWaitFor << 1 | 1;
+
+    size_t const uxTaskID = uxTasksCreated++;
+    uxBitsToWaitFor |= 1 << uxTaskID;
     Axis& axis = *reinterpret_cast<Axis*>(pvParameters);
-    float const fStepsPerMM = axis.calibrateStepsPerMM();
+
+    axis.calibrate();
 
     while (true) {
-        Move move = axis.dequeueMove();
+        Move const move = axis.dequeueMove();
         xEventGroupSync(xEventGroup, 1 << uxTaskID, uxBitsToWaitFor, portMAX_DELAY);
-        axis.move(move.isRelative, move.fDistanceInMM * fStepsPerMM, move.xStepsPerSecond);
+        axis.move(move.isRelative, move.fDistanceInMM * axis.getStepsPerMM(), move.xStepsPerSecond);
     }
 }
