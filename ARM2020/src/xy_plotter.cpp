@@ -17,6 +17,7 @@
 
 static size_t constexpr kTicksPerSecond{ 1'000'000 }, kPenFrequency{ 50 }, kPenPeriod{ kTicksPerSecond / kPenFrequency };
 static Axis* X, * Y;
+
 struct {
     uint32_t uxPlotterHeight;
     uint32_t uxPlotterWidth;
@@ -70,9 +71,10 @@ static void prvSetupHardware() {
     PlotterConfig.load();
 
     Chip_SCT_Init(LPC_SCT0);
+    Chip_SCT_Init(LPC_SCT1);
     Chip_SCT_Init(LPC_SCT2);
-    LPC_SCT0->CONFIG = LPC_SCT2->CONFIG = SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L;
-    LPC_SCT0->CTRL_U = LPC_SCT2->CTRL_U = SCT_CTRL_PRE_L(SystemCoreClock / kTicksPerSecond - 1) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
+    LPC_SCT0->CONFIG = LPC_SCT1->CONFIG = LPC_SCT2->CONFIG = SCT_CONFIG_32BIT_COUNTER | SCT_CONFIG_AUTOLIMIT_L;
+    LPC_SCT0->CTRL_U = LPC_SCT1->CTRL_U = LPC_SCT2->CTRL_U = SCT_CTRL_PRE_L(SystemCoreClock / kTicksPerSecond - 1) | SCT_CTRL_CLRCTR_L | SCT_CTRL_HALT_L;
 
     // SCTimer config for pen servo motor.
     LPC_SCT0->MATCHREL[0].U = kPenPeriod - 1;
@@ -92,44 +94,43 @@ static void prvSetupHardware() {
     prvSetLaserPower(0);
     Chip_SWM_MovablePortPinAssign(SWM_SCT0_OUT1_O, 0, 12);
 
-    // SCTimer Events for X and Y Axes. Match condition and the state in which events occur is set by callback function.
-    LPC_SCT2->EVENT[0].CTRL = 0 << 0 | 1 << 12; // X axis event is set by Match 0 condition
-    LPC_SCT2->EVENT[1].CTRL = 1 << 0 | 1 << 12; // Y axis event is set by Match 1 condition
-    LPC_SCT2->RES = 0xF;
-    LPC_SCT2->EVEN = SCT_EVT_0 | SCT_EVT_1;
-    NVIC_SetPriority(SCT2_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY);
+    // SCTimer config for X and Y axes.
+    // Originally both axes used LPC_SCT2, but it caused strange behaviour if they had very different step speeds.
+    LPC_SCT1->EVENT[0].STATE = LPC_SCT2->EVENT[0].STATE = 0x1;
+    LPC_SCT1->EVENT[0].CTRL = LPC_SCT2->EVENT[0].CTRL = 0 << 0 | 1 << 12;
+    LPC_SCT1->RES = LPC_SCT2->RES = 0x3;
+    LPC_SCT1->EVEN = LPC_SCT2->EVEN = SCT_EVT_0;
+    NVIC_EnableIRQ(SCT1_IRQn);
     NVIC_EnableIRQ(SCT2_IRQn);
+    NVIC_SetPriority(SCT1_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY);
+    NVIC_SetPriority(SCT2_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY);
 
-    // Start timers.
+    // Start SCT0 timer.
     LPC_SCT0->CTRL_L &= ~SCT_CTRL_HALT_L;
-    LPC_SCT2->CTRL_L &= ~SCT_CTRL_HALT_L;
 }
 
 extern "C" {
 void vConfigureTimerForRunTimeStats() {
-    Chip_SCT_Init(LPC_SCT3);
-    LPC_SCT3->CONFIG = SCT_CONFIG_32BIT_COUNTER;
-    LPC_SCT3->CTRL_U = SCT_CTRL_PRE_L(255) | SCT_CTRL_CLRCTR_L;
+    Chip_SCT_Init(LPC_SCTSMALL1);
+    LPC_SCTSMALL1->CONFIG = SCT_CONFIG_32BIT_COUNTER;
+    LPC_SCTSMALL1->CTRL_U = SCT_CTRL_PRE_L(255) | SCT_CTRL_CLRCTR_L;
+}
+
+void SCT1_IRQHandler(void) {
+    if (X != nullptr)
+        X->step();
+    LPC_SCT1->EVFLAG = SCT_EVT_0;
 }
 
 void SCT2_IRQHandler(void) {
-    if (LPC_SCT2->EVFLAG & SCT_EVT_0 && X != nullptr) {
-        LPC_SCT2->EVFLAG = SCT_EVT_0;
-        X->step();
-    }
-
-    if (LPC_SCT2->EVFLAG & SCT_EVT_1 && Y != nullptr) {
-        LPC_SCT2->EVFLAG = SCT_EVT_1;
+    if (Y != nullptr)
         Y->step();
-    }
+    LPC_SCT2->EVFLAG = SCT_EVT_0;
 }
 }
 
 int main(void) {
     prvSetupHardware();
-
-    auto& kXAxisEnable = LPC_SCT2->EVENT[0].STATE;
-    auto& kYAxisEnable = LPC_SCT2->EVENT[1].STATE;
 
     X = new Axis{
         PlotterConfig.uxPlotterWidth,
@@ -139,11 +140,11 @@ int main(void) {
         { { 0,  9 }, true, true, true },
         { { 0, 29 }, true, true, true },
         [](float stepsPerSecond) {
-            LPC_SCT2->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
-            kXAxisEnable = true;
+            LPC_SCT1->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
+            LPC_SCT1->CTRL_L &= ~SCT_CTRL_HALT_L;
         },
         []() {
-            kXAxisEnable = false;
+            LPC_SCT1->CTRL_L |= SCT_CTRL_HALT_L;
         }
     };
 
@@ -155,31 +156,32 @@ int main(void) {
         { { 0,  0 }, true, true, true },
         { { 1,  3 }, true, true, true },
         [](float stepsPerSecond) {
-            LPC_SCT2->MATCHREL[1].U = kTicksPerSecond / stepsPerSecond - 1;
-            kYAxisEnable = true;
+            LPC_SCT2->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
+            LPC_SCT2->CTRL_L &= ~SCT_CTRL_HALT_L;
         },
         []() {
-            kYAxisEnable = false;
+            LPC_SCT2->CTRL_L |= SCT_CTRL_HALT_L;
         }
     };
 
     DigitalIOPin* ioButtonResume = new DigitalIOPin{ { 0, 8 }, true, true, true, PIN_INT0_IRQn, [](bool pressed) {
-        if (pressed) {
+        if (pressed)
             Axis::resume();
-        }
     }};
 
     DigitalIOPin* ioButtonHalt = new DigitalIOPin{ { 1, 6 }, true, true, true, PIN_INT1_IRQn, [](bool pressed) {
-        if (pressed) {
+        if (pressed)
             Axis::halt();
-        }
     }};
 
     xTaskCreate([](void* pvParameters) {
         static auto constexpr MalformedCode = "Malformed code\r\n", UnknownCode = "Unknown code\r\n", OK = "OK\r\n";
         enum { G1 = 'G' + 1, G28 = 'G' + 28, M1 = 'M' + 1, M2 = 'M' + 2, M4 = 'M' + 4, M5 = 'M' + 5, M10 = 'M' + 10, M11 = 'M' + 11 };
-        float fX, fY;
-        uint8_t isRelative, ucPulseWidth;
+        struct {
+            float fX{ 0 }, fY{ 0 };
+            uint8_t isRelative{ 0 }, ucPulseWidth{ 0 };
+            void (*setPulseWidth)(uint8_t ucPulseWidth) = nullptr;
+        } move;
         char pcBuffer[RCV_BUFSIZE];
 
         while (true) {
@@ -191,16 +193,30 @@ int main(void) {
 
             switch (letter + number) {
             case G1: // Command from mDraw to move to X/Y co-ordinate
-                if (std::sscanf(pcBuffer + 3, "X%f Y%f A%hhu", &fX, &fY, &isRelative) == 3) {
-                    if (std::abs(fX) < std::abs(fY)) {
-                        X->enqueueMove({ isRelative, fX, std::abs(fX) * Axis::kMaximumPPS / std::abs(fY) });
-                        Y->enqueueMove({ isRelative, fY, Axis::kMaximumPPS });
-                    } else if (std::abs(fX) < std::abs(fY)) {
-                        X->enqueueMove({ isRelative, fX, Axis::kMaximumPPS });
-                        Y->enqueueMove({ isRelative, fY, std::abs(fY) * Axis::kMaximumPPS / std::abs(fX) });
+                if (std::sscanf(pcBuffer + 3, "X%f Y%f A%hhu", &move.fX, &move.fY, &move.isRelative) == 3) {
+                    while (!(LPC_SCT1->CTRL_L & LPC_SCT2->CTRL_L & SCT_CTRL_HALT_L))
+                        vTaskDelay(1);
+
+                    if (!move.isRelative) {
+                        move.fX -= X->getPosition();
+                        move.fY -= Y->getPosition();
+                    }
+
+                    if (move.setPulseWidth != nullptr) {
+                        move.setPulseWidth(move.ucPulseWidth);
+                        vTaskDelay(100);
+                        move.setPulseWidth = nullptr;
+                    }
+
+                    if (float fabsX{ std::abs(move.fX) }, fabsY{ std::abs(move.fY) }; fabsX < fabsY) {
+                        X->enqueueMove({ move.fX, fabsX * Axis::kMaximumPPS / fabsY });
+                        Y->enqueueMove({ move.fY, Axis::kMaximumPPS });
+                    } else if (fabsX > fabsY) {
+                        X->enqueueMove({ move.fX, Axis::kMaximumPPS });
+                        Y->enqueueMove({ move.fY, fabsY * Axis::kMaximumPPS / fabsX });
                     } else {
-                        X->enqueueMove({ isRelative, fX, Axis::kMaximumPPS });
-                        Y->enqueueMove({ isRelative, fY, Axis::kMaximumPPS });
+                        X->enqueueMove({ move.fX, Axis::kMaximumPPS });
+                        Y->enqueueMove({ move.fY, Axis::kMaximumPPS });
                     }
                 }
                 else
@@ -208,15 +224,14 @@ int main(void) {
                 break;
 
             case G28: // Command from mDraw to move to origin
-                X->enqueueMove({ Axis::Move::Absolute, 0, Axis::kMaximumPPS });
-                Y->enqueueMove({ Axis::Move::Absolute, 0, Axis::kMaximumPPS });
+                X->enqueueMove({ 0 - X->getPosition(), Axis::kMaximumPPS });
+                Y->enqueueMove({ 0 - Y->getPosition(), Axis::kMaximumPPS });
                 break;
 
             case M1: // Command from mDraw to SET pen position
-                if (std::sscanf(pcBuffer + 3, "%hhu", &ucPulseWidth) == 1) {
-                    while (kXAxisEnable || kYAxisEnable);
-                    prvSetPenPosition(ucPulseWidth);
-                } else
+                if (std::sscanf(pcBuffer + 3, "%hhu", &move.ucPulseWidth) == 1)
+                    move.setPulseWidth = prvSetPenPosition;
+                else
                     ITM_write(MalformedCode);
                 break;
 
@@ -234,12 +249,9 @@ int main(void) {
             }
 
             case M4: // Command from mDraw to SET laser power
-                if (std::sscanf(pcBuffer + 3, "%hhu", &ucPulseWidth) == 1) {
-                    while (kXAxisEnable || kYAxisEnable);
-                    prvSetLaserPower(ucPulseWidth);
-                    if (ucPulseWidth == 0)
-                        vTaskDelay(200); // Simulator takes a bit to realise we've stopped the laser.
-                } else
+                if (std::sscanf(pcBuffer + 3, "%hhu", &move.ucPulseWidth) == 1)
+                    move.setPulseWidth = prvSetLaserPower;
+                else
                     ITM_write(MalformedCode);
                 break;
 
@@ -285,7 +297,7 @@ int main(void) {
 
             USB_send(OK, sizeof(OK));
         }
-    }, "GCode Parser", configMINIMAL_STACK_SIZE + 270, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
+    }, "GCode Parser", configMINIMAL_STACK_SIZE + 280, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 
     xTaskCreate(cdc_task, "CDC", configMINIMAL_STACK_SIZE, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 

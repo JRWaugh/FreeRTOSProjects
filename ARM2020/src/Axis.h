@@ -22,8 +22,6 @@ class Axis {
 public:
     enum Direction { Clockwise = 0, CounterClockwise };
     struct Move {
-        enum { Absolute, Relative };
-        uint8_t isRelative;
         float fDistanceInMM;
         float xStepsPerSecond;
     };
@@ -43,8 +41,8 @@ public:
 
     ~Axis();
 
-    void move(bool isRelative, int32_t xStepsToMove, float fStepsPerSecond = kMaximumPPS);
-    void movef(bool isRelative, float fDistanceToMove, float fStepsPerSecond = kMaximumPPS);
+    void move(int32_t xStepsToMove, float fStepsPerSecond = kMaximumPPS);
+    void movef(float fDistanceToMove, float fStepsPerSecond = kMaximumPPS);
     void step();
     static void halt();
     static void resume();
@@ -52,12 +50,16 @@ public:
     [[nodiscard]] bool readLimitSwitch();
     void onNewConfiguration(size_t uxSizeInMM, uint8_t ucOriginDirection) {
         this->uxSizeInMM = uxSizeInMM;
-        if (this->ucOriginDirection != ucOriginDirection) {
+        if (this->ucOriginDirection != ucOriginDirection)
             xCurrentPosition = xMaximumPosition - xCurrentPosition;
-        }
         this->ucOriginDirection = ucOriginDirection;
-        enqueueMove({ Axis::Move::Absolute, 0, Axis::kMaximumPPS });
+        enqueueMove({ 0 - getPosition(), Axis::kMaximumPPS });
     }
+
+    float getPosition() {
+        return xCurrentPosition / fStepsPerMM;
+    }
+
     BaseType_t enqueueMove(Move const & message);
     [[nodiscard]] Move dequeueMove();
     void calibrate();

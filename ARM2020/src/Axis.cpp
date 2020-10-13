@@ -8,10 +8,8 @@
 #include <Axis.h>
 #include <cmath>
 #include "timers.h"
-[[nodiscard]] static bool isInterrupt() {
-    return SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk;
-}
 
+[[nodiscard]] static bool isInterrupt() { return SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk; }
 static EventGroupHandle_t xEventGroup{ xEventGroupCreate() };
 
 Axis::Axis(	size_t uxSizeInMM,
@@ -37,10 +35,8 @@ Axis::~Axis() {
     vEventGroupDelete(xEventGroup);
 }
 
-void Axis::move(bool isRelative, int32_t xStepsToMove, float fStepsPerSecond) {
-    if (!isRelative)
-        xStepsToMove -= xCurrentPosition;
-
+void Axis::move(int32_t xStepsToMove, float fStepsPerSecond) {
+    xEventGroupWaitBits(xEventGroup, uxEnableBit, pdFALSE, pdTRUE, portMAX_DELAY);
     if (xStepsToMove == 0)
         return;
     else if (xStepsToMove > 0)
@@ -49,13 +45,12 @@ void Axis::move(bool isRelative, int32_t xStepsToMove, float fStepsPerSecond) {
         ioDirection.write(ucOriginDirection);
     xStepsRemaining = abs(xStepsToMove);
 
-    xEventGroupWaitBits(xEventGroup, uxEnableBit, pdFALSE, pdTRUE, portMAX_DELAY);
     startStepping(fStepsPerSecond);
     xSemaphoreTake(xMoveComplete, portMAX_DELAY);
 }
 
-void Axis::movef(bool isRelative, float fDistanceToMove, float fStepsPerSecond) {
-    move(isRelative, std::round(fDistanceToMove * fStepsPerMM), fStepsPerSecond);
+void Axis::movef(float fDistanceToMove, float fStepsPerSecond) {
+    move(std::round(fDistanceToMove * fStepsPerMM), fStepsPerSecond);
 }
 
 void Axis::step() {
@@ -128,9 +123,9 @@ BaseType_t Axis::enqueueMove(Move const & message) {
 }
 
 void Axis::calibrate() {
-    move(Move::Relative, INT32_MIN);
-    move(Move::Relative, INT32_MAX);
-    move(Move::Absolute, 0);
+    move(INT32_MIN);
+    move(INT32_MAX);
+    move(0 - xCurrentPosition);
     fStepsPerMM = static_cast<float>(xMaximumPosition) / uxSizeInMM;
 }
 
@@ -147,6 +142,6 @@ void Axis::prvAxisTask(void* pvParameters) {
     while (true) {
         Move const move = axis.dequeueMove();
         xEventGroupSync(xEventGroup, 1 << uxTaskID, uxBitsToWaitFor, portMAX_DELAY);
-        axis.movef(move.isRelative, move.fDistanceInMM, move.xStepsPerSecond);
+        axis.movef(move.fDistanceInMM, move.xStepsPerSecond);
     }
 }

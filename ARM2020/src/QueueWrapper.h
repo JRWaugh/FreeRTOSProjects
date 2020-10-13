@@ -24,7 +24,7 @@ public:
 
     QueueWrapper(QueueWrapper const & queue) = delete;
 
-    BaseType_t push_front(T const & t, TickType_t ticksToWait = 0) {
+    BaseType_t push_front(T const & t, TickType_t ticksToWait = portMAX_DELAY) {
         if (!is_interrupt())
             return xQueueSendToFront(queue, &t, ticksToWait);
         else {
@@ -35,7 +35,7 @@ public:
         }
     }
 
-    BaseType_t push_back(T const & t, TickType_t ticksToWait = 0) {
+    BaseType_t push_back(T const & t, TickType_t ticksToWait = portMAX_DELAY) {
         if (!is_interrupt())
             return xQueueSendToBack(queue, &t, ticksToWait);
         else {
