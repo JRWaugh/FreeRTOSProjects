@@ -7,10 +7,11 @@
 
 #include <Axis.h>
 #include <cmath>
-#include "timers.h"
+#include "event_groups.h"
 
 [[nodiscard]] static bool isInterrupt() { return SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk; }
 static EventGroupHandle_t xEventGroup{ xEventGroupCreate() };
+static constexpr EventBits_t uxEnableBit{ 1UL << 31 };
 
 Axis::Axis(	size_t uxSizeInMM,
         uint8_t ucOriginDirection,
@@ -19,24 +20,21 @@ Axis::Axis(	size_t uxSizeInMM,
         DigitalIOPin&& ioOriginSW,
         DigitalIOPin&& ioLimitSW,
         StepEnableCallback start,
-        StepDisableCallback stop
-) :
-        uxSizeInMM{ uxSizeInMM }, ucOriginDirection{ ucOriginDirection },
-        ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW },
-        startStepping{ start }, stopStepping{ stop } {
+        StepDisableCallback stop)
+// I know this is an extremely long line, but eclipse does not handle auto-identation correctly unless you do this.
+: uxSizeInMM{ uxSizeInMM }, ucOriginDirection{ ucOriginDirection }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, startStepping{ start }, stopStepping{ stop } {
     ioStep.write(true);
     xTaskCreate(prvAxisTask, nullptr, 70, this, tskIDLE_PRIORITY + 1UL, &xTaskHandle);
 }
 
 Axis::~Axis() {
     onMoveComplete();
-    vTaskDelete(xTaskHandle); // Will still have a memory leak because of the event group allocated in prvAsixTask, but oh well!
+    vTaskDelete(xTaskHandle);
     vSemaphoreDelete(xMoveComplete);
     vEventGroupDelete(xEventGroup);
 }
 
 void Axis::move(int32_t xStepsToMove, float fStepsPerSecond) {
-    xEventGroupWaitBits(xEventGroup, uxEnableBit, pdFALSE, pdTRUE, portMAX_DELAY);
     if (xStepsToMove == 0)
         return;
     else if (xStepsToMove > 0)
@@ -45,6 +43,7 @@ void Axis::move(int32_t xStepsToMove, float fStepsPerSecond) {
         ioDirection.write(ucOriginDirection);
     xStepsRemaining = abs(xStepsToMove);
 
+    xEventGroupWaitBits(xEventGroup, uxEnableBit, pdFALSE, pdTRUE, portMAX_DELAY);
     startStepping(fStepsPerSecond);
     xSemaphoreTake(xMoveComplete, portMAX_DELAY);
 }
@@ -81,6 +80,13 @@ void Axis::step() {
     ioStep.write(true);
 }
 
+void Axis::calibrate() {
+    move(INT32_MIN);
+    move(INT32_MAX);
+    move(0 - xCurrentPosition);
+    fStepsPerMM = static_cast<float>(xMaximumPosition) / uxSizeInMM;
+}
+
 void Axis::halt() {
     if (!isInterrupt())
         xEventGroupClearBits(xEventGroup, uxEnableBit);
@@ -98,20 +104,16 @@ void Axis::resume() {
     }
 }
 
-void Axis::onMoveComplete() {
-    stopStepping();
-
-    portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-    xSemaphoreGiveFromISR(xMoveComplete, &xHigherPriorityWoken);
-    portEND_SWITCHING_ISR(xHigherPriorityWoken);
-}
-
 bool Axis::readOriginSwitch() {
     return ioOriginSW.read();
 }
 
 bool Axis::readLimitSwitch() {
     return ioLimitSW.read();
+}
+
+[[nodiscard]] float Axis::getPositionInMM() const {
+    return xCurrentPosition / fStepsPerMM;
 }
 
 BaseType_t Axis::enqueueMove(Move const & message) {
@@ -122,20 +124,29 @@ BaseType_t Axis::enqueueMove(Move const & message) {
     return xMoveQueue.pop_front();
 }
 
-void Axis::calibrate() {
-    move(INT32_MIN);
-    move(INT32_MAX);
-    move(0 - xCurrentPosition);
-    fStepsPerMM = static_cast<float>(xMaximumPosition) / uxSizeInMM;
+void Axis::onNewConfiguration(size_t uxSizeInMM, uint8_t ucOriginDirection) {
+    this->uxSizeInMM = uxSizeInMM;
+    if (this->ucOriginDirection != ucOriginDirection)
+        xCurrentPosition = xMaximumPosition - xCurrentPosition;
+    this->ucOriginDirection = ucOriginDirection;
+    enqueueMove({ 0 - getPositionInMM(), Axis::kMaximumPPS });
+}
+
+void Axis::onMoveComplete() {
+    stopStepping();
+
+    portBASE_TYPE xHigherPriorityWoken = pdFALSE;
+    xSemaphoreGiveFromISR(xMoveComplete, &xHigherPriorityWoken);
+    portEND_SWITCHING_ISR(xHigherPriorityWoken);
 }
 
 void Axis::prvAxisTask(void* pvParameters) {
     static size_t uxTasksCreated{ 0 };
     static EventBits_t uxBitsToWaitFor{ 0 };
 
-    size_t const uxTaskID = uxTasksCreated++;
-    uxBitsToWaitFor |= 1 << uxTaskID;
     Axis& axis = *reinterpret_cast<Axis*>(pvParameters);
+    size_t const uxTaskID = uxTasksCreated++;
+    uxBitsToWaitFor |= 1 << uxTaskID; // Deleting an Axis will break this functionality. Not that hard to fix, but why complicate things?
 
     axis.calibrate();
 

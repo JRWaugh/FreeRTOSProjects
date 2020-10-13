@@ -19,17 +19,17 @@ static size_t constexpr kTicksPerSecond{ 1'000'000 }, kPenFrequency{ 50 }, kPenP
 static Axis* X, * Y;
 
 struct {
-    uint32_t uxPlotterHeight;
-    uint32_t uxPlotterWidth;
+    uint32_t uxHeight;
+    uint32_t uxWidth;
     uint8_t ucDirX;
     uint8_t ucDirY;
     uint8_t ucSpeed;
     uint8_t ucPenUp;
     uint8_t ucPenDown;
-    char ucPadding[3];
+    char ucHeader[3]; // Technically a footer, but I want to avoid padding!
     uint8_t save() {
-        strcpy(ucPadding, "XY");
-        return Chip_EEPROM_Write(0x100, (uint8_t*) this, 16);
+        strcpy(ucHeader, "XY");
+        return Chip_EEPROM_Write(0x100, (uint8_t*) this, sizeof(*this));
     }
 
     void load() {
@@ -37,10 +37,10 @@ struct {
         Chip_SYSCTL_PeriphReset(RESET_EEPROM);
 
         if (Chip_EEPROM_Read(0x100, (uint8_t*) this, sizeof(*this)) == IAP_CMD_SUCCESS) {
-            if (strcmp(ucPadding, "XY") != 0) {
+            if (strcmp(ucHeader, "XY") != 0) {
                 // Default configuration
-                uxPlotterHeight = 380;
-                uxPlotterWidth = 310;
+                uxHeight = 380;
+                uxWidth = 310;
                 ucDirX = Axis::Clockwise;
                 ucDirY = Axis::Clockwise;
                 ucSpeed = 50;
@@ -133,7 +133,7 @@ int main(void) {
     prvSetupHardware();
 
     X = new Axis{
-        PlotterConfig.uxPlotterWidth,
+        PlotterConfig.uxWidth,
         PlotterConfig.ucDirX,
         { { 0, 24 }, false, false, false },
         { { 1,  0 }, false, false, false },
@@ -149,7 +149,7 @@ int main(void) {
     };
 
     Y = new Axis{
-        PlotterConfig.uxPlotterHeight,
+        PlotterConfig.uxHeight,
         PlotterConfig.ucDirY,
         { { 0, 27 }, false, false, false },
         { { 0, 28 }, false, false, false },
@@ -180,7 +180,7 @@ int main(void) {
         struct {
             float fX{ 0 }, fY{ 0 };
             uint8_t isRelative{ 0 }, ucPulseWidth{ 0 };
-            void (*setPulseWidth)(uint8_t ucPulseWidth) = nullptr;
+            void (*onMoveStart)(uint8_t ucPulseWidth){ nullptr };
         } move;
         char pcBuffer[RCV_BUFSIZE];
 
@@ -198,14 +198,14 @@ int main(void) {
                         vTaskDelay(1);
 
                     if (!move.isRelative) {
-                        move.fX -= X->getPosition();
-                        move.fY -= Y->getPosition();
+                        move.fX -= X->getPositionInMM();
+                        move.fY -= Y->getPositionInMM();
                     }
 
-                    if (move.setPulseWidth != nullptr) {
-                        move.setPulseWidth(move.ucPulseWidth);
+                    if (move.onMoveStart != nullptr) {
+                        move.onMoveStart(move.ucPulseWidth);
                         vTaskDelay(100);
-                        move.setPulseWidth = nullptr;
+                        move.onMoveStart = nullptr;
                     }
 
                     if (float fabsX{ std::abs(move.fX) }, fabsY{ std::abs(move.fY) }; fabsX < fabsY) {
@@ -224,13 +224,13 @@ int main(void) {
                 break;
 
             case G28: // Command from mDraw to move to origin
-                X->enqueueMove({ 0 - X->getPosition(), Axis::kMaximumPPS });
-                Y->enqueueMove({ 0 - Y->getPosition(), Axis::kMaximumPPS });
+                X->enqueueMove({ 0 - X->getPositionInMM(), Axis::kMaximumPPS });
+                Y->enqueueMove({ 0 - Y->getPositionInMM(), Axis::kMaximumPPS });
                 break;
 
             case M1: // Command from mDraw to SET pen position
                 if (std::sscanf(pcBuffer + 3, "%hhu", &move.ucPulseWidth) == 1)
-                    move.setPulseWidth = prvSetPenPosition;
+                    move.onMoveStart = prvSetPenPosition;
                 else
                     ITM_write(MalformedCode);
                 break;
@@ -250,7 +250,7 @@ int main(void) {
 
             case M4: // Command from mDraw to SET laser power
                 if (std::sscanf(pcBuffer + 3, "%hhu", &move.ucPulseWidth) == 1)
-                    move.setPulseWidth = prvSetLaserPower;
+                    move.onMoveStart = prvSetLaserPower;
                 else
                     ITM_write(MalformedCode);
                 break;
@@ -262,8 +262,8 @@ int main(void) {
                 if (std::sscanf(pcBuffer + 3, "A%hhu B%hhu H%lu W%lu S%hhu", &ucDirX, &ucDirY, &uxPlotterHeight, &uxPlotterWidth, &ucSpeed) == 5) {
                     PlotterConfig.ucDirX = ucDirX;
                     PlotterConfig.ucDirY = ucDirY;
-                    PlotterConfig.uxPlotterHeight = uxPlotterHeight;
-                    PlotterConfig.uxPlotterWidth = uxPlotterWidth;
+                    PlotterConfig.uxHeight = uxPlotterHeight;
+                    PlotterConfig.uxWidth = uxPlotterWidth;
                     PlotterConfig.ucSpeed = ucSpeed;
                     PlotterConfig.save();
 
@@ -277,7 +277,7 @@ int main(void) {
             case M10: // Query from mDraw for width, height, origin point, ucSpeed, pen up and pen down positions
                 sprintf(pcBuffer,
                         "M10 XY %lu %lu 0.00 0.00 A%hhu B%hhu S%hhu H0 U%hhu D%hhu\r\n",
-                        PlotterConfig.uxPlotterWidth, PlotterConfig.uxPlotterHeight,
+                        PlotterConfig.uxWidth, PlotterConfig.uxHeight,
                         PlotterConfig.ucDirX, PlotterConfig.ucDirY, PlotterConfig.ucSpeed,
                         PlotterConfig.ucPenUp, PlotterConfig.ucPenDown);
                 USB_send(pcBuffer, strlen(pcBuffer));

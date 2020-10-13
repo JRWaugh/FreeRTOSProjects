@@ -12,7 +12,6 @@
 #include "semphr.h"
 #include "DigitalIOPin.h"
 #include <atomic>
-#include "event_groups.h"
 #include "QueueWrapper.h"
 
 using StepEnableCallback = void (*)(float);
@@ -27,7 +26,6 @@ public:
     };
 
     static constexpr size_t kMaximumPPS{ 3000 };
-    static constexpr EventBits_t uxEnableBit{ 1 << 7 };
 
     Axis(   size_t uxSizeInMM,
             uint8_t ucOriginDirection,
@@ -44,25 +42,17 @@ public:
     void move(int32_t xStepsToMove, float fStepsPerSecond = kMaximumPPS);
     void movef(float fDistanceToMove, float fStepsPerSecond = kMaximumPPS);
     void step();
+    void calibrate();
     static void halt();
     static void resume();
+
     [[nodiscard]] bool readOriginSwitch();
     [[nodiscard]] bool readLimitSwitch();
-    void onNewConfiguration(size_t uxSizeInMM, uint8_t ucOriginDirection) {
-        this->uxSizeInMM = uxSizeInMM;
-        if (this->ucOriginDirection != ucOriginDirection)
-            xCurrentPosition = xMaximumPosition - xCurrentPosition;
-        this->ucOriginDirection = ucOriginDirection;
-        enqueueMove({ 0 - getPosition(), Axis::kMaximumPPS });
-    }
-
-    float getPosition() {
-        return xCurrentPosition / fStepsPerMM;
-    }
-
+    [[nodiscard]] float getPositionInMM() const;
     BaseType_t enqueueMove(Move const & message);
     [[nodiscard]] Move dequeueMove();
-    void calibrate();
+
+    void onNewConfiguration(size_t uxSizeInMM, uint8_t ucOriginDirection);
 
 private:
     static constexpr int32_t kPositionUnknown{ -1 };
