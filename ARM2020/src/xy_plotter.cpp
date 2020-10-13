@@ -35,8 +35,9 @@ struct {
         Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_EEPROM);
         Chip_SYSCTL_PeriphReset(RESET_EEPROM);
 
-        if (Chip_EEPROM_Read(0x100, (uint8_t*) this, 16) == IAP_CMD_SUCCESS) {
+        if (Chip_EEPROM_Read(0x100, (uint8_t*) this, sizeof(*this)) == IAP_CMD_SUCCESS) {
             if (strcmp(ucPadding, "XY") != 0) {
+                // Default configuration
                 uxPlotterHeight = 380;
                 uxPlotterWidth = 310;
                 ucDirX = Axis::Clockwise;
@@ -96,7 +97,7 @@ static void prvSetupHardware() {
     LPC_SCT2->EVENT[1].CTRL = 1 << 0 | 1 << 12; // Y axis event is set by Match 1 condition
     LPC_SCT2->RES = 0xF;
     LPC_SCT2->EVEN = SCT_EVT_0 | SCT_EVT_1;
-    NVIC_SetPriority(SCT2_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY + 1);
+    NVIC_SetPriority(SCT2_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY);
     NVIC_EnableIRQ(SCT2_IRQn);
 
     // Start timers.
@@ -164,21 +165,13 @@ int main(void) {
 
     DigitalIOPin* ioButtonResume = new DigitalIOPin{ { 0, 8 }, true, true, true, PIN_INT0_IRQn, [](bool pressed) {
         if (pressed) {
-            if (X != nullptr)
-                X->resume();
-
-            if (Y != nullptr)
-                Y->resume();
+            Axis::resume();
         }
     }};
 
     DigitalIOPin* ioButtonHalt = new DigitalIOPin{ { 1, 6 }, true, true, true, PIN_INT1_IRQn, [](bool pressed) {
         if (pressed) {
-            if (X != nullptr)
-                X->halt();
-
-            if (Y != nullptr)
-                Y->halt();
+            Axis::halt();
         }
     }};
 
@@ -199,17 +192,15 @@ int main(void) {
             switch (letter + number) {
             case G1: // Command from mDraw to move to X/Y co-ordinate
                 if (std::sscanf(pcBuffer + 3, "X%f Y%f A%hhu", &fX, &fY, &isRelative) == 3) {
-                    if (isRelative) {
-                        if (std::abs(fX) < std::abs(fY)) {
-                            X->enqueueMove({ Axis::Move::Relative, fX, std::abs(fX) * Axis::kMaximumPPS / std::abs(fY) });
-                            Y->enqueueMove({ Axis::Move::Relative, fY, Axis::kMaximumPPS });
-                        } else {
-                            X->enqueueMove({ Axis::Move::Relative, fX, Axis::kMaximumPPS });
-                            Y->enqueueMove({ Axis::Move::Relative, fY, std::abs(fY) * Axis::kMaximumPPS / std::abs(fX) });
-                        }
+                    if (std::abs(fX) < std::abs(fY)) {
+                        X->enqueueMove({ isRelative, fX, std::abs(fX) * Axis::kMaximumPPS / std::abs(fY) });
+                        Y->enqueueMove({ isRelative, fY, Axis::kMaximumPPS });
+                    } else if (std::abs(fX) < std::abs(fY)) {
+                        X->enqueueMove({ isRelative, fX, Axis::kMaximumPPS });
+                        Y->enqueueMove({ isRelative, fY, std::abs(fY) * Axis::kMaximumPPS / std::abs(fX) });
                     } else {
-                        X->enqueueMove({ Axis::Move::Absolute, fX, Axis::kMaximumPPS });
-                        Y->enqueueMove({ Axis::Move::Absolute, fY, Axis::kMaximumPPS });
+                        X->enqueueMove({ isRelative, fX, Axis::kMaximumPPS });
+                        Y->enqueueMove({ isRelative, fY, Axis::kMaximumPPS });
                     }
                 }
                 else
@@ -224,7 +215,6 @@ int main(void) {
             case M1: // Command from mDraw to SET pen position
                 if (std::sscanf(pcBuffer + 3, "%hhu", &ucPulseWidth) == 1) {
                     while (kXAxisEnable || kYAxisEnable);
-
                     prvSetPenPosition(ucPulseWidth);
                 } else
                     ITM_write(MalformedCode);
@@ -246,7 +236,6 @@ int main(void) {
             case M4: // Command from mDraw to SET laser power
                 if (std::sscanf(pcBuffer + 3, "%hhu", &ucPulseWidth) == 1) {
                     while (kXAxisEnable || kYAxisEnable);
-
                     prvSetLaserPower(ucPulseWidth);
                     if (ucPulseWidth == 0)
                         vTaskDelay(200); // Simulator takes a bit to realise we've stopped the laser.

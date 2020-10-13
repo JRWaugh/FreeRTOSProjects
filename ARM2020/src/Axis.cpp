@@ -7,10 +7,12 @@
 
 #include <Axis.h>
 #include <cmath>
-
+#include "timers.h"
 [[nodiscard]] static bool isInterrupt() {
     return SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk;
 }
+
+static EventGroupHandle_t xEventGroup{ xEventGroupCreate() };
 
 Axis::Axis(	size_t uxSizeInMM,
         uint8_t ucOriginDirection,
@@ -36,8 +38,6 @@ Axis::~Axis() {
 }
 
 void Axis::move(bool isRelative, int32_t xStepsToMove, float fStepsPerSecond) {
-    xEventGroupWaitBits(xEventGroup, uxEnableBit, pdFALSE, pdTRUE, portMAX_DELAY);
-
     if (!isRelative)
         xStepsToMove -= xCurrentPosition;
 
@@ -48,18 +48,22 @@ void Axis::move(bool isRelative, int32_t xStepsToMove, float fStepsPerSecond) {
     else if (xStepsToMove < 0)
         ioDirection.write(ucOriginDirection);
     xStepsRemaining = abs(xStepsToMove);
-    startStepping(fStepsPerSecond);
 
+    xEventGroupWaitBits(xEventGroup, uxEnableBit, pdFALSE, pdTRUE, portMAX_DELAY);
+    startStepping(fStepsPerSecond);
     xSemaphoreTake(xMoveComplete, portMAX_DELAY);
+}
+
+void Axis::movef(bool isRelative, float fDistanceToMove, float fStepsPerSecond) {
+    move(isRelative, std::round(fDistanceToMove * fStepsPerMM), fStepsPerSecond);
 }
 
 void Axis::step() {
     ioStep.write(false);
 
     --xStepsRemaining;
-    auto const direction = ioDirection.read();
 
-    if (direction == ucOriginDirection) {
+    if (ioDirection.read() == ucOriginDirection) {
         --xCurrentPosition;
         bool const isPressed = ucOriginDirection == Clockwise ? readOriginSwitch() : readLimitSwitch();
         if (isPressed) {
@@ -131,9 +135,8 @@ void Axis::calibrate() {
 }
 
 void Axis::prvAxisTask(void* pvParameters) {
-    static EventGroupHandle_t xEventGroup{ xEventGroupCreate() }; // This will cause a leak when Axis is deleted.
-    static EventBits_t uxBitsToWaitFor{ 0 };
     static size_t uxTasksCreated{ 0 };
+    static EventBits_t uxBitsToWaitFor{ 0 };
 
     size_t const uxTaskID = uxTasksCreated++;
     uxBitsToWaitFor |= 1 << uxTaskID;
@@ -144,6 +147,6 @@ void Axis::prvAxisTask(void* pvParameters) {
     while (true) {
         Move const move = axis.dequeueMove();
         xEventGroupSync(xEventGroup, 1 << uxTaskID, uxBitsToWaitFor, portMAX_DELAY);
-        axis.move(move.isRelative, move.fDistanceInMM * axis.getStepsPerMM(), move.xStepsPerSecond);
+        axis.movef(move.isRelative, move.fDistanceInMM, move.xStepsPerSecond);
     }
 }

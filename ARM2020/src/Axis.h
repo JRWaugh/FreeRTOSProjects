@@ -20,15 +20,16 @@ using StepDisableCallback = void (*)();
 
 class Axis {
 public:
+    enum Direction { Clockwise = 0, CounterClockwise };
     struct Move {
         enum { Absolute, Relative };
-        bool isRelative;
+        uint8_t isRelative;
         float fDistanceInMM;
         float xStepsPerSecond;
     };
 
-    enum Direction { Clockwise = 0, CounterClockwise };
-    static constexpr size_t kMaximumPPS{ 2000 };
+    static constexpr size_t kMaximumPPS{ 3000 };
+    static constexpr EventBits_t uxEnableBit{ 1 << 7 };
 
     Axis(   size_t uxSizeInMM,
             uint8_t ucOriginDirection,
@@ -43,15 +44,12 @@ public:
     ~Axis();
 
     void move(bool isRelative, int32_t xStepsToMove, float fStepsPerSecond = kMaximumPPS);
+    void movef(bool isRelative, float fDistanceToMove, float fStepsPerSecond = kMaximumPPS);
     void step();
-    void halt();
-    void resume();
+    static void halt();
+    static void resume();
     [[nodiscard]] bool readOriginSwitch();
     [[nodiscard]] bool readLimitSwitch();
-    [[nodiscard]] float getStepsPerMM() const {
-        return fStepsPerMM;
-    }
-
     void onNewConfiguration(size_t uxSizeInMM, uint8_t ucOriginDirection) {
         this->uxSizeInMM = uxSizeInMM;
         if (this->ucOriginDirection != ucOriginDirection) {
@@ -60,14 +58,12 @@ public:
         this->ucOriginDirection = ucOriginDirection;
         enqueueMove({ Axis::Move::Absolute, 0, Axis::kMaximumPPS });
     }
-
     BaseType_t enqueueMove(Move const & message);
     [[nodiscard]] Move dequeueMove();
     void calibrate();
 
 private:
     static constexpr int32_t kPositionUnknown{ -1 };
-    static constexpr EventBits_t uxEnableBit = 1 << 0;
     static void prvAxisTask(void* pvParameters);
 
     void onMoveComplete();
@@ -80,7 +76,6 @@ private:
     std::atomic<int32_t> xStepsRemaining{ 0 }, xCurrentPosition{ 0 }, xMaximumPosition{ kPositionUnknown };
     float fStepsPerMM;
 
-    EventGroupHandle_t xEventGroup{ xEventGroupCreate() };
     SemaphoreHandle_t xMoveComplete{ xSemaphoreCreateBinary() };
     TaskHandle_t xTaskHandle;
     QueueWrapper<Move, 1> xMoveQueue;
