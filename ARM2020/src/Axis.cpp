@@ -7,27 +7,33 @@
 
 #include <Axis.h>
 #include <cmath>
-#include "event_groups.h"
 
+// Lazy copy-paste of isInterrupt function, since I didn't feel like writing a utilities file that wouldn't have much else in it.
 [[nodiscard]] static bool isInterrupt() { return SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk; }
 static EventGroupHandle_t xEventGroup{ xEventGroupCreate() };
-static constexpr EventBits_t uxEnableBit{ 1UL << 31 };
+static constexpr EventBits_t uxEnableBit{ 1UL << 23 };
+size_t Axis::uxAxesCreated{ 0 };
+EventBits_t Axis::uxBitsToWaitFor{ 0 };
 
 Axis::Axis(	size_t uxSizeInMM,
         uint8_t ucOriginDirection,
         DigitalIOPin&& ioStep,
         DigitalIOPin&& ioDirection,
-        DigitalIOPin&& ioOriginSW,
-        DigitalIOPin&& ioLimitSW,
+        DigitalIOPin&& ioLimitSW1,
+        DigitalIOPin&& ioLimitSW2,
         StepEnableCallback start,
         StepDisableCallback stop)
-// I know this is an extremely long line, but eclipse does not handle auto-identation correctly unless you do this.
-: uxSizeInMM{ uxSizeInMM }, ucOriginDirection{ ucOriginDirection }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioOriginSW{ ioOriginSW }, ioLimitSW{ ioLimitSW }, startStepping{ start }, stopStepping{ stop } {
+// I know this is an extremely long line, but MCUXpresso does not handle auto-identation correctly unless you do this.
+: uxTaskID{ Axis::uxAxesCreated++ }, uxSizeInMM{ uxSizeInMM }, ucOriginDirection{ ucOriginDirection }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioLimitSW1{ ioLimitSW1 }, ioLimitSW2{ ioLimitSW2 }, startStepping{ start }, stopStepping{ stop } {
+    Axis::uxBitsToWaitFor |= 1UL << uxTaskID | 1UL << (uxTaskID + 12);
     ioStep.write(true);
     xTaskCreate(prvAxisTask, nullptr, 70, this, tskIDLE_PRIORITY + 1UL, &xTaskHandle);
 }
 
 Axis::~Axis() {
+    // This won't actually make things function properly if axes are deleted at any point, but it's the thought that counts.
+    Axis::uxBitsToWaitFor &= ~(1UL << uxTaskID | 1UL << uxTaskID + 12);
+    --Axis::uxAxesCreated;
     onMoveComplete();
     vTaskDelete(xTaskHandle);
     vSemaphoreDelete(xMoveComplete);
@@ -59,8 +65,7 @@ void Axis::step() {
 
     if (ioDirection.read() == ucOriginDirection) {
         --xCurrentPosition;
-        bool const isPressed = ucOriginDirection == Clockwise ? readOriginSwitch() : readLimitSwitch();
-        if (isPressed) {
+        if (readOriginSwitch()) {
             if (xMaximumPosition == kPositionUnknown)
                 xCurrentPosition = 0;
             onMoveComplete();
@@ -68,8 +73,7 @@ void Axis::step() {
             onMoveComplete();
     } else {
         ++xCurrentPosition;
-        bool const isPressed = ucOriginDirection == Clockwise ? readLimitSwitch() : readOriginSwitch();
-        if (isPressed) {
+        if (readLimitSwitch()) {
             if (xMaximumPosition == kPositionUnknown)
                 xMaximumPosition = xCurrentPosition.load() - 1;
             onMoveComplete();
@@ -85,6 +89,12 @@ void Axis::calibrate() {
     move(INT32_MAX);
     move(0 - xCurrentPosition);
     fStepsPerMM = static_cast<float>(xMaximumPosition) / uxSizeInMM;
+    xEventGroupSetBits(xEventGroup, 1UL << (uxTaskID + 12));
+}
+
+EventBits_t Axis::waitForCalibration(TickType_t xTicksToWait) {
+    auto test = xEventGroupGetBits(xEventGroup);
+    return xEventGroupWaitBits(xEventGroup, uxBitsToWaitFor & 0xFFE000, pdFALSE, pdTRUE, xTicksToWait);
 }
 
 void Axis::halt() {
@@ -105,11 +115,11 @@ void Axis::resume() {
 }
 
 bool Axis::readOriginSwitch() {
-    return ioOriginSW.read();
+    return ucOriginDirection == Clockwise ? ioLimitSW1.read() : ioLimitSW2.read();
 }
 
 bool Axis::readLimitSwitch() {
-    return ioLimitSW.read();
+    return ucOriginDirection == Clockwise ? ioLimitSW2.read() : ioLimitSW1.read();
 }
 
 [[nodiscard]] float Axis::getPositionInMM() const {
@@ -141,18 +151,13 @@ void Axis::onMoveComplete() {
 }
 
 void Axis::prvAxisTask(void* pvParameters) {
-    static size_t uxTasksCreated{ 0 };
-    static EventBits_t uxBitsToWaitFor{ 0 };
-
     Axis& axis = *reinterpret_cast<Axis*>(pvParameters);
-    size_t const uxTaskID = uxTasksCreated++;
-    uxBitsToWaitFor |= 1 << uxTaskID; // Deleting an Axis will break this functionality. Not that hard to fix, but why complicate things?
 
     axis.calibrate();
 
     while (true) {
         Move const move = axis.dequeueMove();
-        xEventGroupSync(xEventGroup, 1 << uxTaskID, uxBitsToWaitFor, portMAX_DELAY);
+        xEventGroupSync(xEventGroup, 1 << axis.uxTaskID, uxBitsToWaitFor & 0xFFF, portMAX_DELAY);
         axis.movef(move.fDistanceInMM, move.xStepsPerSecond);
     }
 }

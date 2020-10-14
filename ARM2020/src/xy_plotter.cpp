@@ -21,9 +21,9 @@ static Axis* X, * Y;
 struct {
     uint32_t uxHeight;
     uint32_t uxWidth;
-    uint8_t ucDirX;
-    uint8_t ucDirY;
-    uint8_t ucSpeed;
+    uint8_t ucOriginDirX;
+    uint8_t ucOriginDirY;
+    uint8_t ucSpeed; // Not being used.
     uint8_t ucPenUp;
     uint8_t ucPenDown;
     char ucHeader[3]; // Technically a footer, but I want to avoid padding!
@@ -41,8 +41,8 @@ struct {
                 // Default configuration
                 uxHeight = 380;
                 uxWidth = 310;
-                ucDirX = Axis::Clockwise;
-                ucDirY = Axis::Clockwise;
+                ucOriginDirX = Axis::Clockwise;
+                ucOriginDirY = Axis::Clockwise;
                 ucSpeed = 50;
                 ucPenUp = 160;
                 ucPenDown = 90;
@@ -95,7 +95,7 @@ static void prvSetupHardware() {
     Chip_SWM_MovablePortPinAssign(SWM_SCT0_OUT1_O, 0, 12);
 
     // SCTimer config for X and Y axes.
-    // Originally both axes used LPC_SCT2, but it caused strange behaviour if they had very different step speeds.
+    // Originally both axes used LPC_SCT2, but it caused strange interrupt behaviour if they had very different step speeds.
     LPC_SCT1->EVENT[0].STATE = LPC_SCT2->EVENT[0].STATE = 0x1;
     LPC_SCT1->EVENT[0].CTRL = LPC_SCT2->EVENT[0].CTRL = 0 << 0 | 1 << 12;
     LPC_SCT1->RES = LPC_SCT2->RES = 0x3;
@@ -134,7 +134,7 @@ int main(void) {
 
     X = new Axis{
         PlotterConfig.uxWidth,
-        PlotterConfig.ucDirX,
+        PlotterConfig.ucOriginDirX,
         { { 0, 24 }, false, false, false },
         { { 1,  0 }, false, false, false },
         { { 0,  9 }, true, true, true },
@@ -150,7 +150,7 @@ int main(void) {
 
     Y = new Axis{
         PlotterConfig.uxHeight,
-        PlotterConfig.ucDirY,
+        PlotterConfig.ucOriginDirY,
         { { 0, 27 }, false, false, false },
         { { 0, 28 }, false, false, false },
         { { 0,  0 }, true, true, true },
@@ -194,8 +194,10 @@ int main(void) {
             switch (letter + number) {
             case G1: // Command from mDraw to move to X/Y co-ordinate
                 if (std::sscanf(pcBuffer + 3, "X%f Y%f A%hhu", &move.fX, &move.fY, &move.isRelative) == 3) {
-                    while (!(LPC_SCT1->CTRL_L & LPC_SCT2->CTRL_L & SCT_CTRL_HALT_L))
+                    // Delay while Axis timers are still running. Ideally would wait on an event bit instead.
+                    while (!(LPC_SCT1->CTRL_L & LPC_SCT2->CTRL_L & SCT_CTRL_HALT_L)) {
                         vTaskDelay(1);
+                    }
 
                     if (!move.isRelative) {
                         move.fX -= X->getPositionInMM();
@@ -204,10 +206,12 @@ int main(void) {
 
                     if (move.onMoveStart != nullptr) {
                         move.onMoveStart(move.ucPulseWidth);
-                        vTaskDelay(100);
+                        vTaskDelay(configTICK_RATE_HZ / 10);
                         move.onMoveStart = nullptr;
                     }
 
+                    // Scale speed so that both axes will complete a move at the same time
+                    // C++20's spaceship operator might make this nicer.
                     if (float fabsX{ std::abs(move.fX) }, fabsY{ std::abs(move.fY) }; fabsX < fabsY) {
                         X->enqueueMove({ move.fX, fabsX * Axis::kMaximumPPS / fabsY });
                         Y->enqueueMove({ move.fY, Axis::kMaximumPPS });
@@ -260,8 +264,8 @@ int main(void) {
                 uint8_t ucDirX, ucDirY, ucSpeed;
 
                 if (std::sscanf(pcBuffer + 3, "A%hhu B%hhu H%lu W%lu S%hhu", &ucDirX, &ucDirY, &uxPlotterHeight, &uxPlotterWidth, &ucSpeed) == 5) {
-                    PlotterConfig.ucDirX = ucDirX;
-                    PlotterConfig.ucDirY = ucDirY;
+                    PlotterConfig.ucOriginDirX = ucDirX;
+                    PlotterConfig.ucOriginDirY = ucDirY;
                     PlotterConfig.uxHeight = uxPlotterHeight;
                     PlotterConfig.uxWidth = uxPlotterWidth;
                     PlotterConfig.ucSpeed = ucSpeed;
@@ -274,13 +278,16 @@ int main(void) {
                 break;
             }
 
-            case M10: // Query from mDraw for width, height, origin point, ucSpeed, pen up and pen down positions
+            case M10: // Query from mDraw for width, height, origin direction, speed, pen up and pen down positions
                 sprintf(pcBuffer,
                         "M10 XY %lu %lu 0.00 0.00 A%hhu B%hhu S%hhu H0 U%hhu D%hhu\r\n",
                         PlotterConfig.uxWidth, PlotterConfig.uxHeight,
-                        PlotterConfig.ucDirX, PlotterConfig.ucDirY, PlotterConfig.ucSpeed,
+                        PlotterConfig.ucOriginDirX, PlotterConfig.ucOriginDirY, PlotterConfig.ucSpeed,
                         PlotterConfig.ucPenUp, PlotterConfig.ucPenDown);
                 USB_send(pcBuffer, strlen(pcBuffer));
+
+                X->waitForCalibration(portMAX_DELAY);
+                Y->waitForCalibration(portMAX_DELAY);
                 break;
 
             case M11: // Query from mDraw for limit switch states
