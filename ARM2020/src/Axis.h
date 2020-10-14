@@ -15,8 +15,8 @@
 #include "QueueWrapper.h"
 #include <atomic>
 
-using StepEnableCallback = void (*)(float);
-using StepDisableCallback = void (*)();
+using MoveBeginCallback = void (*)(float);
+using MoveEndCallback = void (*)();
 
 class Axis {
 public:
@@ -26,8 +26,8 @@ public:
             DigitalIOPin&& ioDirection,
             DigitalIOPin&& ioLimitSW1,
             DigitalIOPin&& ioLimitSW2,
-            StepEnableCallback,
-            StepDisableCallback
+            MoveBeginCallback,
+            MoveEndCallback
     );
 
     ~Axis();
@@ -43,6 +43,7 @@ public:
     void movef(float fDistanceToMove, float fStepsPerSecond = kMaximumPPS);
     void step();
     void calibrate();
+    EventBits_t waitForMoveEnd(TickType_t xTicksToWait);
     EventBits_t waitForCalibration(TickType_t xTicksToWait);
     static void halt();
     static void resume();
@@ -52,32 +53,29 @@ public:
     BaseType_t enqueueMove(Move const & message);
     [[nodiscard]] Move dequeueMove();
     void onNewConfiguration(size_t uxSizeInMM, uint8_t ucOriginDirection);
-    size_t const uxTaskID; // Could write a getter, but it's const so it's fine so long as nobody goes out of their way to change its value...
+
+    size_t const uxAxisID; // Could write a getter, but it's const so it's fine so long as nobody goes out of their way to change its value...
 
 private:
-    static constexpr int32_t kPositionUnknown{ -1 };
-    static void prvAxisTask(void* pvParameters);
+    void moveEnd();
 
-    /* The same event bits are being used for everything.
-     * Bits 0 and 1 are used for synchronisation, bits 12 and 13 are used for signalling the axes are calibrated.
-     * Bit 23 is used for enabling/disabling the axis, and is accessed with halt() and resume() functions.
-     * Deleting an Axis will break this functionality. Creating too many axes will also break this functionality. Oh well! */
+    enum { MoveReady = 0, Stopped = 8, Calibrated = 16, Enabled = 23 };
     static size_t uxAxesCreated;
+    static EventGroupHandle_t xEventGroup;
     static EventBits_t uxBitsToWaitFor;
 
-    void onMoveComplete();
-
+    static constexpr int32_t kPositionUnknown{ -1 };
     size_t uxSizeInMM;
     uint8_t ucOriginDirection;
     DigitalIOPin ioStep, ioDirection, ioLimitSW1, ioLimitSW2;
-    StepEnableCallback startStepping;
-    StepDisableCallback stopStepping;
+    MoveBeginCallback onMoveBegin;
+    MoveEndCallback onMoveEnd;
     std::atomic<int32_t> xStepsRemaining{ 0 }, xCurrentPosition{ 0 }, xMaximumPosition{ kPositionUnknown };
     float fStepsPerMM;
 
-    SemaphoreHandle_t xMoveComplete{ xSemaphoreCreateBinary() };
     TaskHandle_t xTaskHandle;
     QueueWrapper<Move, 1> xMoveQueue;
+    static void prvAxisTask(void* pvParameters);
 };
 
 #endif /* AXIS_H_ */

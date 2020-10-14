@@ -15,6 +15,8 @@
 #include "ITM_write.h"
 #include "user_vcom.h"
 
+#define SIMULATOR 1
+
 static size_t constexpr kTicksPerSecond{ 1'000'000 }, kPenFrequency{ 50 }, kPenPeriod{ kTicksPerSecond / kPenFrequency };
 static Axis* X, * Y;
 
@@ -88,8 +90,8 @@ static void prvSetupHardware() {
     // SCTimer config for laser.
     LPC_SCT0->MATCHREL[2].U = 256 - 1;
     LPC_SCT0->EVENT[2].STATE = LPC_SCT0->EVENT[3].STATE = 0x1;
-    LPC_SCT0->EVENT[2].CTRL = 1 << 1 | 1 << 12;
-    LPC_SCT0->EVENT[3].CTRL = 1 << 2 | 1 << 12;
+    LPC_SCT0->EVENT[2].CTRL = 2 << 0 | 1 << 12;
+    LPC_SCT0->EVENT[3].CTRL = 3 << 0 | 1 << 12;
     LPC_SCT0->OUT[1].CLR = 1 << 3;
     prvSetLaserPower(0);
     Chip_SWM_MovablePortPinAssign(SWM_SCT0_OUT1_O, 0, 12);
@@ -180,9 +182,13 @@ int main(void) {
         struct {
             float fX{ 0 }, fY{ 0 };
             uint8_t isRelative{ 0 }, ucPulseWidth{ 0 };
-            void (*onMoveStart)(uint8_t ucPulseWidth){ nullptr };
+            void (*setPulseWidth)(uint8_t ucPulseWidth){ nullptr };
         } move;
         char pcBuffer[RCV_BUFSIZE];
+
+        // Ensure axes are calibrated before executing GCodes, else laser/pen could start drawing too early.
+        X->waitForCalibration(portMAX_DELAY);
+        Y->waitForCalibration(portMAX_DELAY);
 
         while (true) {
             USB_receive(pcBuffer, RCV_BUFSIZE);
@@ -194,24 +200,27 @@ int main(void) {
             switch (letter + number) {
             case G1: // Command from mDraw to move to X/Y co-ordinate
                 if (std::sscanf(pcBuffer + 3, "X%f Y%f A%hhu", &move.fX, &move.fY, &move.isRelative) == 3) {
-                    // Delay while Axis timers are still running. Ideally would wait on an event bit instead.
-                    while (!(LPC_SCT1->CTRL_L & LPC_SCT2->CTRL_L & SCT_CTRL_HALT_L)) {
-                        vTaskDelay(1);
-                    }
+                    // Ensure a move is complete before taking position and changing pen/laser pulse width
+                    X->waitForMoveEnd(portMAX_DELAY);
+                    Y->waitForMoveEnd(portMAX_DELAY);
 
                     if (!move.isRelative) {
                         move.fX -= X->getPositionInMM();
                         move.fY -= Y->getPositionInMM();
                     }
 
-                    if (move.onMoveStart != nullptr) {
-                        move.onMoveStart(move.ucPulseWidth);
+                    if (move.setPulseWidth != nullptr) {
+                        move.setPulseWidth(move.ucPulseWidth);
                         vTaskDelay(configTICK_RATE_HZ / 10);
-                        move.onMoveStart = nullptr;
+#if SIMULATOR
+                        // Additional time is needed to ensure the laser is turned off in the simulator
+                        if (move.setPulseWidth == prvSetLaserPower)
+                            vTaskDelay(configTICK_RATE_HZ / 10);
+#endif
+                        move.setPulseWidth = nullptr;
                     }
 
                     // Scale speed so that both axes will complete a move at the same time
-                    // C++20's spaceship operator might make this nicer.
                     if (float fabsX{ std::abs(move.fX) }, fabsY{ std::abs(move.fY) }; fabsX < fabsY) {
                         X->enqueueMove({ move.fX, fabsX * Axis::kMaximumPPS / fabsY });
                         Y->enqueueMove({ move.fY, Axis::kMaximumPPS });
@@ -234,7 +243,7 @@ int main(void) {
 
             case M1: // Command from mDraw to SET pen position
                 if (std::sscanf(pcBuffer + 3, "%hhu", &move.ucPulseWidth) == 1)
-                    move.onMoveStart = prvSetPenPosition;
+                    move.setPulseWidth = prvSetPenPosition;
                 else
                     ITM_write(MalformedCode);
                 break;
@@ -254,7 +263,7 @@ int main(void) {
 
             case M4: // Command from mDraw to SET laser power
                 if (std::sscanf(pcBuffer + 3, "%hhu", &move.ucPulseWidth) == 1)
-                    move.onMoveStart = prvSetLaserPower;
+                    move.setPulseWidth = prvSetLaserPower;
                 else
                     ITM_write(MalformedCode);
                 break;
@@ -285,9 +294,6 @@ int main(void) {
                         PlotterConfig.ucOriginDirX, PlotterConfig.ucOriginDirY, PlotterConfig.ucSpeed,
                         PlotterConfig.ucPenUp, PlotterConfig.ucPenDown);
                 USB_send(pcBuffer, strlen(pcBuffer));
-
-                X->waitForCalibration(portMAX_DELAY);
-                Y->waitForCalibration(portMAX_DELAY);
                 break;
 
             case M11: // Query from mDraw for limit switch states
@@ -310,6 +316,7 @@ int main(void) {
 
     vTaskStartScheduler();
 
+    // Not necessary, but will get rid of compiler warnings that these buttons are unused.
     delete ioButtonResume;
     delete ioButtonHalt;
 }
