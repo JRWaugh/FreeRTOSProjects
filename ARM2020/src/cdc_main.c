@@ -95,7 +95,7 @@ uint32_t USB_receive(char* data, uint32_t length) {
 	memcpy(data, rec.dptr, len);
 	/* send buffer back to allocation queue */
 	xQueueSend(AllocQueue, &rec, portMAX_DELAY);
-
+	data[len] = '\0';
 	return len;
 }
 

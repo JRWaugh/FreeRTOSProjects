@@ -29,6 +29,7 @@ struct {
     uint8_t ucPenUp;
     uint8_t ucPenDown;
     char ucHeader[3]; // Technically a footer, but I want to avoid padding!
+
     uint8_t save() {
         strcpy(ucHeader, "XY");
         return Chip_EEPROM_Write(0x100, (uint8_t*) this, sizeof(*this));
