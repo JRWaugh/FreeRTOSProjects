@@ -150,8 +150,8 @@ int main(void) {
 
     X = new Axis{
         PlotterConfig.ucOriginDirX,
-        { { 0, 27 }, false, false, false }, // 0, 24
-        { { 0, 28 }, false, false, false }, // 1,  0
+        { { 0, 24 }, false, false, false },
+        { { 1,  0 }, false, false, false },
         [](float stepsPerSecond) {
             LPC_SCT1->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
             LPC_SCT1->CTRL_L &= ~SCT_CTRL_HALT_L;
@@ -163,8 +163,8 @@ int main(void) {
 
     Y = new Axis{
         PlotterConfig.ucOriginDirY,
-        { { 0, 24 }, false, false, false }, // 0, 27
-        { { 1,  0 }, false, false, false }, // 0, 28
+        { { 0, 27 }, false, false, false },
+        { { 0, 28 }, false, false, false },
         [](float stepsPerSecond) {
             LPC_SCT2->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
             LPC_SCT2->CTRL_L &= ~SCT_CTRL_HALT_L;
