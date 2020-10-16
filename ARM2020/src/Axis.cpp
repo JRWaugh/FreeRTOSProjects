@@ -1,3 +1,4 @@
+
 /*
  * Axis.cpp
  *
@@ -8,38 +9,29 @@
 #include <Axis.h>
 #include <cmath>
 
-// Lazy copy-paste of isInterrupt function, since I didn't feel like writing a utilities file that wouldn't have much else in it.
-[[nodiscard]] static bool isInterrupt() { return SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk; }
-
-EventGroupHandle_t Axis::xEventGroup{ xEventGroupCreate() };
-EventBits_t Axis::uxBitsToWaitFor{ 0 };
-
-size_t Axis::uxAxesCreated{ 0 };
-Axis::Axis(	size_t uxSizeInMM,
+Axis::Axis(
         uint8_t ucOriginDirection,
         DigitalIOPin&& ioStep,
         DigitalIOPin&& ioDirection,
-        DigitalIOPin&& ioLimitSW1,
-        DigitalIOPin&& ioLimitSW2,
         MoveBeginCallback onMoveBegin,
         MoveEndCallback onMoveEnd)
-// I know this is an extremely long line, but MCUXpresso does not handle auto-identation correctly unless you do this.
-: uxAxisID{ Axis::uxAxesCreated++ }, uxSizeInMM{ uxSizeInMM }, ucOriginDirection{ ucOriginDirection }, ioStep{ ioStep }, ioDirection{ ioDirection }, ioLimitSW1{ ioLimitSW1 }, ioLimitSW2{ ioLimitSW2 }, onMoveBegin{ onMoveBegin }, onMoveEnd{ onMoveEnd } {
-    Axis::uxBitsToWaitFor |= 1UL << (uxAxisID + MoveReady) | 1UL << (uxAxisID + Stopped) | 1UL << (uxAxisID + Calibrated);
+: ucOriginDirection{ ucOriginDirection }, ioStep{ ioStep }, ioDirection{ ioDirection }, onMoveBegin{ onMoveBegin }, onMoveEnd{ onMoveEnd } {
     ioStep.write(true);
-    xTaskCreate(prvAxisTask, nullptr, 70, this, tskIDLE_PRIORITY + 1UL, &xTaskHandle);
+    xTaskCreate(prvStepperTask, nullptr, 78, this, tskIDLE_PRIORITY + 1UL, &xTaskHandle);
 }
 
 Axis::~Axis() {
     // This won't actually make things function properly if axes are deleted at any point, but it's the thought that counts.
-    Axis::uxBitsToWaitFor &= ~(1UL << (uxAxisID + MoveReady) | 1UL << (uxAxisID + Stopped) | 1UL << (uxAxisID + Calibrated));
     --Axis::uxAxesCreated;
-    moveEnd();
+    endMove();
     vTaskDelete(xTaskHandle);
     vEventGroupDelete(xEventGroup);
 }
 
 void Axis::move(int32_t xStepsToMove, float fStepsPerSecond) {
+    if (xStepsToMove == Move::Origin)
+        xStepsToMove = 0 - xCurrentPosition;
+
     if (xStepsToMove == 0)
         return;
     else if (xStepsToMove > 0)
@@ -49,37 +41,25 @@ void Axis::move(int32_t xStepsToMove, float fStepsPerSecond) {
     xStepsRemaining = abs(xStepsToMove);
 
     xEventGroupWaitBits(xEventGroup, 1UL << Enabled, pdFALSE, pdTRUE, portMAX_DELAY);
-    xEventGroupClearBits(xEventGroup, 1UL << (uxAxisID + Stopped));
+    xEventGroupClearBits(xEventGroup, 1UL << (uxID + Stopped));
+    isStepping = true;
     onMoveBegin(fStepsPerSecond);
     waitForMoveEnd(portMAX_DELAY);
 }
 
-void Axis::movef(float fDistanceToMove, float fStepsPerSecond) {
-    move(std::round(fDistanceToMove * fStepsPerMM), fStepsPerSecond);
-}
-
 void Axis::step() {
+    Axis::Stepping = this;
+
     ioStep.write(false);
 
-    --xStepsRemaining;
+    if (xStepsRemaining && --xStepsRemaining == 0)
+        endMove();
 
-    if (ioDirection.read() == ucOriginDirection) {
+    if (ioDirection.read() == ucOriginDirection)
         --xCurrentPosition;
-        if (readOriginSwitch()) {
-            if (xMaximumPosition == kPositionUnknown)
-                xCurrentPosition = 0;
-            moveEnd();
-        } else if (xStepsRemaining == 0)
-            moveEnd();
-    } else {
+    else
         ++xCurrentPosition;
-        if (readLimitSwitch()) {
-            if (xMaximumPosition == kPositionUnknown)
-                xMaximumPosition = xCurrentPosition.load() - 1;
-            moveEnd();
-        } else if (xStepsRemaining == 0)
-            moveEnd();
-    }
+
 
     ioStep.write(true);
 }
@@ -87,80 +67,76 @@ void Axis::step() {
 void Axis::calibrate() {
     move(INT32_MIN);
     move(INT32_MAX);
-    move(0 - xCurrentPosition);
-    fStepsPerMM = static_cast<float>(xMaximumPosition) / uxSizeInMM;
-    xEventGroupSetBits(xEventGroup, 1UL << (uxAxisID + Calibrated));
+    xEventGroupSetBits(xEventGroup, 1UL << (uxID + Calibrated));
 }
 
-EventBits_t Axis::waitForMoveEnd(TickType_t xTicksToWait) {
-    return xEventGroupWaitBits(xEventGroup, 1UL << (uxAxisID + Stopped), pdFALSE, pdTRUE, xTicksToWait);
+[[nodiscard]] int32_t Axis::getCurrentPosition() const {
+    return xCurrentPosition;
 }
 
-EventBits_t Axis::waitForCalibration(TickType_t xTicksToWait) {
-    return xEventGroupWaitBits(xEventGroup, 1UL << (uxAxisID + Calibrated), pdFALSE, pdTRUE, xTicksToWait);
+[[nodiscard]] int32_t Axis::getMaximumPosition() const {
+    return xMaximumPosition;
 }
 
-void Axis::halt() {
-    if (!isInterrupt())
-        xEventGroupClearBits(xEventGroup, 1UL << Enabled);
-    else
-        xEventGroupClearBitsFromISR(xEventGroup, 1UL << Enabled);
+[[nodiscard]] size_t Axis::getID() const {
+    return uxID;
 }
 
-void Axis::resume() {
-    if (!isInterrupt())
-        xEventGroupSetBits(xEventGroup, 1UL << Enabled);
-    else {
-        portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-        xEventGroupSetBitsFromISR(xEventGroup, 1UL << Enabled, &xHigherPriorityWoken);
-        portEND_SWITCHING_ISR(xHigherPriorityWoken);
-    }
+EventBits_t Axis::waitForMoveEnd(TickType_t xTicksToWait) const {
+    return xEventGroupWaitBits(xEventGroup, 1UL << (uxID + Stopped), pdFALSE, pdTRUE, xTicksToWait);
 }
 
-bool Axis::readOriginSwitch() {
-    return ucOriginDirection == Clockwise ? ioLimitSW1.read() : ioLimitSW2.read();
-}
-
-bool Axis::readLimitSwitch() {
-    return ucOriginDirection == Clockwise ? ioLimitSW2.read() : ioLimitSW1.read();
-}
-
-[[nodiscard]] float Axis::getPositionInMM() const {
-    return xCurrentPosition / fStepsPerMM;
+EventBits_t Axis::waitForCalibration(TickType_t xTicksToWait) const {
+    return xEventGroupWaitBits(xEventGroup, 1UL << (uxID + Calibrated), pdFALSE, pdTRUE, xTicksToWait);
 }
 
 BaseType_t Axis::enqueueMove(Move const & message) {
     return xMoveQueue.push_back(message, portMAX_DELAY);
 }
 
-[[nodiscard]] Axis::Move Axis::dequeueMove() {
+[[nodiscard]] Move Axis::dequeueMove() {
     return xMoveQueue.pop_front();
 }
 
-void Axis::onNewConfiguration(size_t uxSizeInMM, uint8_t ucOriginDirection) {
-    this->uxSizeInMM = uxSizeInMM;
+void Axis::setOriginDirection(uint8_t ucOriginDirection) {
     if (this->ucOriginDirection != ucOriginDirection)
         xCurrentPosition = xMaximumPosition - xCurrentPosition;
     this->ucOriginDirection = ucOriginDirection;
-    enqueueMove({ 0 - getPositionInMM(), Axis::kMaximumPPS });
 }
 
-void Axis::moveEnd() {
-    onMoveEnd();
+void Axis::endMove() {
+    if (isStepping) {
+        isStepping = false;
+        onMoveEnd();
 
-    portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-    xEventGroupSetBitsFromISR(xEventGroup, 1UL << (uxAxisID + Stopped), &xHigherPriorityWoken);
-    portEND_SWITCHING_ISR(xHigherPriorityWoken);
+        if (xMaximumPosition == kPositionUnknown) {
+            if (ioDirection.read() == ucOriginDirection) {
+                xCurrentPosition = 0;
+            } else {
+                xMaximumPosition = xCurrentPosition.load();
+            }
+        }
+        portBASE_TYPE xHigherPriorityWoken = pdFALSE;
+        xEventGroupSetBitsFromISR(xEventGroup, 1UL << (uxID + Stopped), &xHigherPriorityWoken);
+        portEND_SWITCHING_ISR(xHigherPriorityWoken);
+    }
 }
 
-void Axis::prvAxisTask(void* pvParameters) {
+void Axis::prvStepperTask(void* pvParameters) {
+    static EventBits_t uxBitsToWaitFor{ 0 };
     Axis& axis = *reinterpret_cast<Axis*>(pvParameters);
+
+    uxBitsToWaitFor |= 1UL << (axis.getID() + MoveReady);
 
     axis.calibrate();
 
     while (true) {
         Move const move = axis.dequeueMove();
-        xEventGroupSync(xEventGroup, 1UL << (axis.uxAxisID + MoveReady), uxBitsToWaitFor & (0xFF << MoveReady), portMAX_DELAY);
-        axis.movef(move.fDistanceInMM, move.xStepsPerSecond);
+        xEventGroupSync(xEventGroup, 1UL << (axis.getID() + MoveReady), uxBitsToWaitFor, portMAX_DELAY);
+        axis.move(move.xStepsToMove, move.fStepsPerSecond);
     }
 }
+
+EventGroupHandle_t Axis::xEventGroup{ xEventGroupCreate() };
+Axis* Axis::Stepping{ nullptr };
+size_t Axis::uxAxesCreated{ 0 };

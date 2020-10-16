@@ -5,12 +5,13 @@
  *      Author: Joshua
  */
 
+#include <Axis.h>
 #include "board.h"
 #include "FreeRTOS.h"
 #include "heap_lock_monitor.h"
-#include "Axis.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include "ITM_write.h"
 #include "user_vcom.h"
@@ -19,8 +20,10 @@
 
 static size_t constexpr kTicksPerSecond{ 1'000'000 }, kPenFrequency{ 50 }, kPenPeriod{ kTicksPerSecond / kPenFrequency };
 static Axis* X, * Y;
+static DigitalIOPin* ioButtonResume, *ioButtonHalt, *ioLimitSwitch1, *ioLimitSwitch2, *ioLimitSwitch3, *ioLimitSwitch4;
 
 struct {
+    enum { Clockwise, CounterClockwise };
     uint32_t uxHeight;
     uint32_t uxWidth;
     uint8_t ucOriginDirX;
@@ -41,11 +44,11 @@ struct {
 
         if (Chip_EEPROM_Read(0x100, (uint8_t*) this, sizeof(*this)) == IAP_CMD_SUCCESS) {
             if (strcmp(ucHeader, "XY") != 0) {
-                // Default configuration
+                // Set default configuration if header doesn't match.
                 uxHeight = 380;
                 uxWidth = 310;
-                ucOriginDirX = Axis::Clockwise;
-                ucOriginDirY = Axis::Clockwise;
+                ucOriginDirX = Clockwise;
+                ucOriginDirY = Clockwise;
                 ucSpeed = 50;
                 ucPenUp = 160;
                 ucPenDown = 90;
@@ -69,10 +72,12 @@ static void prvSetLaserPower(uint8_t ucLaserPower) {
 static void prvSetupHardware() {
     SystemCoreClockUpdate();
     Board_Init();
+    Board_LED_Set(0, false);
     heap_monitor_setup();
     ITM_init();
     PlotterConfig.load();
 
+    // Initialise SCTimers. Setting prescale, clearing match count, and halting all three.
     Chip_SCT_Init(LPC_SCT0);
     Chip_SCT_Init(LPC_SCT1);
     Chip_SCT_Init(LPC_SCT2);
@@ -98,7 +103,6 @@ static void prvSetupHardware() {
     Chip_SWM_MovablePortPinAssign(SWM_SCT0_OUT1_O, 0, 12);
 
     // SCTimer config for X and Y axes.
-    // Originally both axes used LPC_SCT2, but it caused strange interrupt behaviour if they had very different step speeds.
     LPC_SCT1->EVENT[0].STATE = LPC_SCT2->EVENT[0].STATE = 0x1;
     LPC_SCT1->EVENT[0].CTRL = LPC_SCT2->EVENT[0].CTRL = 0 << 0 | 1 << 12;
     LPC_SCT1->RES = LPC_SCT2->RES = 0x3;
@@ -135,13 +139,19 @@ void SCT2_IRQHandler(void) {
 int main(void) {
     prvSetupHardware();
 
+    ioButtonResume = new DigitalIOPin{ { 0,  8 }, true, true, true, PIN_INT0_IRQn, Axis::ResumeCallback };
+    ioButtonHalt   = new DigitalIOPin{ { 1,  6 }, true, true, true, PIN_INT1_IRQn, Axis::HaltCallback };
+
+    // Can be moved to static variables inside Axis if anybody wants to make a pretty interface for it.
+    ioLimitSwitch1 = new DigitalIOPin{ { 0,  9 }, true, true, true, PIN_INT2_IRQn, Axis::LimitSWCallback };
+    ioLimitSwitch2 = new DigitalIOPin{ { 0, 29 }, true, true, true, PIN_INT3_IRQn, Axis::LimitSWCallback };
+    ioLimitSwitch3 = new DigitalIOPin{ { 0,  0 }, true, true, true, PIN_INT4_IRQn, Axis::LimitSWCallback };
+    ioLimitSwitch4 = new DigitalIOPin{ { 1,  3 }, true, true, true, PIN_INT5_IRQn, Axis::LimitSWCallback };
+
     X = new Axis{
-        PlotterConfig.uxWidth,
         PlotterConfig.ucOriginDirX,
-        { { 0, 24 }, false, false, false },
-        { { 1,  0 }, false, false, false },
-        { { 0,  9 }, true, true, true },
-        { { 0, 29 }, true, true, true },
+        { { 0, 27 }, false, false, false }, // 0, 24
+        { { 0, 28 }, false, false, false }, // 1,  0
         [](float stepsPerSecond) {
             LPC_SCT1->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
             LPC_SCT1->CTRL_L &= ~SCT_CTRL_HALT_L;
@@ -152,12 +162,9 @@ int main(void) {
     };
 
     Y = new Axis{
-        PlotterConfig.uxHeight,
         PlotterConfig.ucOriginDirY,
-        { { 0, 27 }, false, false, false },
-        { { 0, 28 }, false, false, false },
-        { { 0,  0 }, true, true, true },
-        { { 1,  3 }, true, true, true },
+        { { 0, 24 }, false, false, false }, // 0, 27
+        { { 1,  0 }, false, false, false }, // 0, 28
         [](float stepsPerSecond) {
             LPC_SCT2->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
             LPC_SCT2->CTRL_L &= ~SCT_CTRL_HALT_L;
@@ -167,29 +174,35 @@ int main(void) {
         }
     };
 
-    DigitalIOPin* ioButtonResume = new DigitalIOPin{ { 0, 8 }, true, true, true, PIN_INT0_IRQn, [](bool pressed) {
-        if (pressed)
-            Axis::resume();
-    }};
-
-    DigitalIOPin* ioButtonHalt = new DigitalIOPin{ { 1, 6 }, true, true, true, PIN_INT1_IRQn, [](bool pressed) {
-        if (pressed)
-            Axis::halt();
-    }};
-
     xTaskCreate([](void* pvParameters) {
         static auto constexpr MalformedCode = "Malformed code\r\n", UnknownCode = "Unknown code\r\n", OK = "OK\r\n";
         enum { G1 = 'G' + 1, G28 = 'G' + 28, M1 = 'M' + 1, M2 = 'M' + 2, M4 = 'M' + 4, M5 = 'M' + 5, M10 = 'M' + 10, M11 = 'M' + 11 };
         struct {
-            float fX{ 0 }, fY{ 0 };
+            float fX{ 0 }, fY{ 0 }, fStepsPerMMX{ 0 }, fStepsPerMMY{ 0 };
             uint8_t isRelative{ 0 }, ucPulseWidth{ 0 };
             void (*setPulseWidth)(uint8_t ucPulseWidth){ nullptr };
         } move;
+
         char pcBuffer[RCV_BUFSIZE];
 
-        // Ensure axes are calibrated before executing GCodes, else laser/pen could start drawing too early.
         X->waitForCalibration(portMAX_DELAY);
         Y->waitForCalibration(portMAX_DELAY);
+
+        // Should probably allow for some wiggle room with the ratio, but it works fine with the simulator for now. This is a bit of a rush job.
+        if (auto const fRatio = (float) X->getMaximumPosition() / Y->getMaximumPosition(); fRatio == (float) PlotterConfig.uxHeight / PlotterConfig.uxWidth) {
+            Axis::swap(&X, &Y);
+        } else if (fRatio != (float) PlotterConfig.uxWidth / PlotterConfig.uxHeight) {
+            while (true) {
+                Board_LED_Toggle(0);
+                vTaskDelay(configTICK_RATE_HZ);
+            }
+        }
+
+        move.fStepsPerMMX = X->getMaximumPosition() / PlotterConfig.uxWidth;
+        move.fStepsPerMMY = Y->getMaximumPosition() / PlotterConfig.uxHeight;
+
+        X->enqueueMove({ Move::Origin, Axis::kMaximumPPS });
+        Y->enqueueMove({ Move::Origin, Axis::kMaximumPPS });
 
         while (true) {
             USB_receive(pcBuffer, RCV_BUFSIZE);
@@ -201,14 +214,17 @@ int main(void) {
             switch (letter + number) {
             case G1: // Command from mDraw to move to X/Y co-ordinate
                 if (std::sscanf(pcBuffer + 3, "X%f Y%f A%hhu", &move.fX, &move.fY, &move.isRelative) == 3) {
-                    // Ensure a move is complete before taking position and changing pen/laser pulse width
                     X->waitForMoveEnd(portMAX_DELAY);
                     Y->waitForMoveEnd(portMAX_DELAY);
 
+                    move.fX *= move.fStepsPerMMX;
+                    move.fY *= move.fStepsPerMMY;
                     if (!move.isRelative) {
-                        move.fX -= X->getPositionInMM();
-                        move.fY -= Y->getPositionInMM();
+                        move.fX -= X->getCurrentPosition();
+                        move.fY -= Y->getCurrentPosition();
                     }
+                    int32_t const xStepsToMoveX = std::round(move.fX);
+                    int32_t const xStepsToMoveY = std::round(move.fY);
 
                     if (move.setPulseWidth != nullptr) {
                         move.setPulseWidth(move.ucPulseWidth);
@@ -221,16 +237,16 @@ int main(void) {
                         move.setPulseWidth = nullptr;
                     }
 
-                    // Scale speed so that both axes will complete a move at the same time
+                    // Scale speed so that both axes will move a different number of steps in the same time
                     if (float fabsX{ std::abs(move.fX) }, fabsY{ std::abs(move.fY) }; fabsX < fabsY) {
-                        X->enqueueMove({ move.fX, fabsX * Axis::kMaximumPPS / fabsY });
-                        Y->enqueueMove({ move.fY, Axis::kMaximumPPS });
+                        X->enqueueMove({ xStepsToMoveX, fabsX * Axis::kMaximumPPS / fabsY });
+                        Y->enqueueMove({ xStepsToMoveY, Axis::kMaximumPPS });
                     } else if (fabsX > fabsY) {
-                        X->enqueueMove({ move.fX, Axis::kMaximumPPS });
-                        Y->enqueueMove({ move.fY, fabsY * Axis::kMaximumPPS / fabsX });
+                        X->enqueueMove({ xStepsToMoveX, Axis::kMaximumPPS });
+                        Y->enqueueMove({ xStepsToMoveY, fabsY * Axis::kMaximumPPS / fabsX });
                     } else {
-                        X->enqueueMove({ move.fX, Axis::kMaximumPPS });
-                        Y->enqueueMove({ move.fY, Axis::kMaximumPPS });
+                        X->enqueueMove({ xStepsToMoveX, Axis::kMaximumPPS });
+                        Y->enqueueMove({ xStepsToMoveY, Axis::kMaximumPPS });
                     }
                 }
                 else
@@ -238,8 +254,8 @@ int main(void) {
                 break;
 
             case G28: // Command from mDraw to move to origin
-                X->enqueueMove({ 0 - X->getPositionInMM(), Axis::kMaximumPPS });
-                Y->enqueueMove({ 0 - Y->getPositionInMM(), Axis::kMaximumPPS });
+                X->enqueueMove({ Move::Origin, Axis::kMaximumPPS });
+                Y->enqueueMove({ Move::Origin, Axis::kMaximumPPS });
                 break;
 
             case M1: // Command from mDraw to SET pen position
@@ -278,11 +294,11 @@ int main(void) {
                     PlotterConfig.ucOriginDirY = ucDirY;
                     PlotterConfig.uxHeight = uxPlotterHeight;
                     PlotterConfig.uxWidth = uxPlotterWidth;
-                    PlotterConfig.ucSpeed = ucSpeed;
+                    PlotterConfig.ucSpeed = ucSpeed + 1;
                     PlotterConfig.save();
 
-                    X->onNewConfiguration(uxPlotterWidth, ucDirX);
-                    Y->onNewConfiguration(uxPlotterHeight, ucDirY);
+                    X->setOriginDirection(ucDirX);
+                    Y->setOriginDirection(ucDirY);
                 } else
                     ITM_write(MalformedCode);
                 break;
@@ -300,7 +316,7 @@ int main(void) {
             case M11: // Query from mDraw for limit switch states
                 sprintf(pcBuffer,
                         "M11 %hhu %hhu %hhu %hhu",
-                        !X->readOriginSwitch(), !X->readLimitSwitch(), !Y->readOriginSwitch(), Y->readLimitSwitch());
+                        !ioLimitSwitch1->read(), !ioLimitSwitch2->read(), !ioLimitSwitch3->read(), !ioLimitSwitch4->read());
                 USB_send(pcBuffer, strlen(pcBuffer));
                 break;
 
@@ -317,7 +333,6 @@ int main(void) {
 
     vTaskStartScheduler();
 
-    // Not necessary, but will get rid of compiler warnings that these buttons are unused.
     delete ioButtonResume;
     delete ioButtonHalt;
 }
