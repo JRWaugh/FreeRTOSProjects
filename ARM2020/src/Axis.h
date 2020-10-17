@@ -13,23 +13,25 @@
 #include "DigitalIOPin.h"
 #include "QueueWrapper.h"
 #include <atomic>
+#include <memory>
 
 
-struct Move {
-    enum { Origin = INT32_MAX - 1 };
-    int32_t xStepsToMove;
-    float fStepsPerSecond;
-};
+
 
 class Axis {
 public:
     using MoveBeginCallback = void (*)(float);
     using MoveEndCallback = void (*)();
+    struct Move {
+        enum { Origin = INT32_MAX - 1 };
+        int32_t xStepsToMove;
+        float fStepsPerSecond;
+    };
     static constexpr float kMaximumPPS{ 3000.0f };
 
     Axis(   uint8_t ucOriginDirection,
-            DigitalIOPin&& ioStep,
-            DigitalIOPin&& ioDirection,
+            std::unique_ptr<DigitalIOPin> ioStep,
+            std::unique_ptr<DigitalIOPin> ioDirection,
             MoveBeginCallback,
             MoveEndCallback
     );
@@ -48,12 +50,16 @@ public:
     BaseType_t enqueueMove(Move const & message);
     [[nodiscard]] Move dequeueMove();
     void setOriginDirection(uint8_t ucOriginDirection);
+    static void swap(Axis* first, Axis* second) {
+        std::swap(first->ioStep, second->ioStep);
+        std::swap(first->ioDirection, second->ioDirection);
 
-    static void swap(Axis** first, Axis** second) {
-        std::swap(*first, *second);
-        std::swap((*first)->ucOriginDirection, (*second)->ucOriginDirection);
-        std::swap((*first)->onMoveBegin, (*second)->onMoveBegin);
-        std::swap((*first)->onMoveEnd, (*second)->onMoveEnd);
+        int32_t xCurrentPosTemp = first->xCurrentPosition;
+        int32_t xMaxPosTemp = first->xMaximumPosition;
+        first->xCurrentPosition = second->xCurrentPosition.load();
+        first->xMaximumPosition = second->xMaximumPosition.load();
+        second->xCurrentPosition = xCurrentPosTemp;
+        second->xMaximumPosition = xMaxPosTemp;
     }
 
 private:
@@ -64,7 +70,7 @@ private:
     size_t const uxID{ Axis::uxAxesCreated++ };
 
     uint8_t ucOriginDirection;
-    DigitalIOPin ioStep, ioDirection;
+    std::unique_ptr<DigitalIOPin> ioStep, ioDirection;
     MoveBeginCallback onMoveBegin;
     MoveEndCallback onMoveEnd;
     std::atomic<bool> isStepping{ false };

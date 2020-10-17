@@ -118,9 +118,9 @@ static void prvSetupHardware() {
 
 extern "C" {
 void vConfigureTimerForRunTimeStats() {
-    Chip_SCT_Init(LPC_SCTSMALL1);
-    LPC_SCTSMALL1->CONFIG = SCT_CONFIG_32BIT_COUNTER;
-    LPC_SCTSMALL1->CTRL_U = SCT_CTRL_PRE_L(255) | SCT_CTRL_CLRCTR_L;
+    Chip_SCT_Init(LPC_SCT3);
+    LPC_SCT3->CONFIG = SCT_CONFIG_32BIT_COUNTER;
+    LPC_SCT3->CTRL_U = SCT_CTRL_PRE_L(255) | SCT_CTRL_CLRCTR_L;
 }
 
 void SCT1_IRQHandler(void) {
@@ -150,8 +150,8 @@ int main(void) {
 
     X = new Axis{
         PlotterConfig.ucOriginDirX,
-        { { 0, 24 }, false, false, false },
-        { { 1,  0 }, false, false, false },
+        std::make_unique<DigitalIOPin>(DigitalIOPin{ { 0, 24 }, false, false, false }),
+        std::make_unique<DigitalIOPin>(DigitalIOPin{ { 1,  0 }, false, false, false }),
         [](float stepsPerSecond) {
             LPC_SCT1->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
             LPC_SCT1->CTRL_L &= ~SCT_CTRL_HALT_L;
@@ -163,8 +163,8 @@ int main(void) {
 
     Y = new Axis{
         PlotterConfig.ucOriginDirY,
-        { { 0, 27 }, false, false, false },
-        { { 0, 28 }, false, false, false },
+        std::make_unique<DigitalIOPin>(DigitalIOPin{ { 0, 27 }, false, false, false }),
+        std::make_unique<DigitalIOPin>(DigitalIOPin{ { 0, 28 }, false, false, false }),
         [](float stepsPerSecond) {
             LPC_SCT2->MATCHREL[0].U = kTicksPerSecond / stepsPerSecond - 1;
             LPC_SCT2->CTRL_L &= ~SCT_CTRL_HALT_L;
@@ -177,20 +177,16 @@ int main(void) {
     xTaskCreate([](void* pvParameters) {
         static auto constexpr MalformedCode = "Malformed code\r\n", UnknownCode = "Unknown code\r\n", OK = "OK\r\n";
         enum { G1 = 'G' + 1, G28 = 'G' + 28, M1 = 'M' + 1, M2 = 'M' + 2, M4 = 'M' + 4, M5 = 'M' + 5, M10 = 'M' + 10, M11 = 'M' + 11 };
+        char pcBuffer[RCV_BUFSIZE];
         struct {
-            float fX{ 0 }, fY{ 0 }, fStepsPerMMX{ 0 }, fStepsPerMMY{ 0 };
+            float fX{ 0 }, fY{ 0 };
             uint8_t isRelative{ 0 }, ucPulseWidth{ 0 };
             void (*setPulseWidth)(uint8_t ucPulseWidth){ nullptr };
         } move;
 
-        char pcBuffer[RCV_BUFSIZE];
-
-        X->waitForCalibration(portMAX_DELAY);
-        Y->waitForCalibration(portMAX_DELAY);
-
         // Should probably allow for some wiggle room with the ratio, but it works fine with the simulator for now. This is a bit of a rush job.
         if (auto const fRatio = (float) X->getMaximumPosition() / Y->getMaximumPosition(); fRatio == (float) PlotterConfig.uxHeight / PlotterConfig.uxWidth) {
-            Axis::swap(&X, &Y);
+            Axis::swap(X, Y);
         } else if (fRatio != (float) PlotterConfig.uxWidth / PlotterConfig.uxHeight) {
             while (true) {
                 Board_LED_Toggle(0);
@@ -198,15 +194,15 @@ int main(void) {
             }
         }
 
-        move.fStepsPerMMX = X->getMaximumPosition() / PlotterConfig.uxWidth;
-        move.fStepsPerMMY = Y->getMaximumPosition() / PlotterConfig.uxHeight;
+        float const fStepsPerMMX = X->getMaximumPosition() / PlotterConfig.uxWidth;
+        float const fStepsPerMMY = Y->getMaximumPosition() / PlotterConfig.uxHeight;
 
-        X->enqueueMove({ Move::Origin, Axis::kMaximumPPS });
-        Y->enqueueMove({ Move::Origin, Axis::kMaximumPPS });
+        // Ensure axes are at the origin before taking commands from mDraw.
+        X->enqueueMove({ Axis::Move::Origin, Axis::kMaximumPPS });
+        Y->enqueueMove({ Axis::Move::Origin, Axis::kMaximumPPS });
 
         while (true) {
             USB_receive(pcBuffer, RCV_BUFSIZE);
-            ITM_write(pcBuffer);
 
             auto const letter = pcBuffer[0];
             auto const number = std::atoi(pcBuffer + 1);
@@ -216,15 +212,6 @@ int main(void) {
                 if (std::sscanf(pcBuffer + 3, "X%f Y%f A%hhu", &move.fX, &move.fY, &move.isRelative) == 3) {
                     X->waitForMoveEnd(portMAX_DELAY);
                     Y->waitForMoveEnd(portMAX_DELAY);
-
-                    move.fX *= move.fStepsPerMMX;
-                    move.fY *= move.fStepsPerMMY;
-                    if (!move.isRelative) {
-                        move.fX -= X->getCurrentPosition();
-                        move.fY -= Y->getCurrentPosition();
-                    }
-                    int32_t const xStepsToMoveX = std::round(move.fX);
-                    int32_t const xStepsToMoveY = std::round(move.fY);
 
                     if (move.setPulseWidth != nullptr) {
                         move.setPulseWidth(move.ucPulseWidth);
@@ -237,16 +224,19 @@ int main(void) {
                         move.setPulseWidth = nullptr;
                     }
 
+                    int32_t const xStepsX = move.isRelative ? std::roundf(move.fX * fStepsPerMMX) : std::roundf(move.fX * fStepsPerMMX - X->getCurrentPosition());
+                    int32_t const xStepsY = move.isRelative ? std::roundf(move.fY * fStepsPerMMY) : std::roundf(move.fY * fStepsPerMMY - Y->getCurrentPosition());
+
                     // Scale speed so that both axes will move a different number of steps in the same time
-                    if (float fabsX{ std::abs(move.fX) }, fabsY{ std::abs(move.fY) }; fabsX < fabsY) {
-                        X->enqueueMove({ xStepsToMoveX, fabsX * Axis::kMaximumPPS / fabsY });
-                        Y->enqueueMove({ xStepsToMoveY, Axis::kMaximumPPS });
-                    } else if (fabsX > fabsY) {
-                        X->enqueueMove({ xStepsToMoveX, Axis::kMaximumPPS });
-                        Y->enqueueMove({ xStepsToMoveY, fabsY * Axis::kMaximumPPS / fabsX });
+                    if (auto absX{ std::abs(xStepsX) }, absY{ std::abs(xStepsY) }; absX < absY) {
+                        X->enqueueMove({ xStepsX, absX * Axis::kMaximumPPS / absY });
+                        Y->enqueueMove({ xStepsY, Axis::kMaximumPPS });
+                    } else if (absX > absY) {
+                        X->enqueueMove({ xStepsX, Axis::kMaximumPPS });
+                        Y->enqueueMove({ xStepsY, absY * Axis::kMaximumPPS / absX });
                     } else {
-                        X->enqueueMove({ xStepsToMoveX, Axis::kMaximumPPS });
-                        Y->enqueueMove({ xStepsToMoveY, Axis::kMaximumPPS });
+                        X->enqueueMove({ xStepsX, Axis::kMaximumPPS });
+                        Y->enqueueMove({ xStepsY, Axis::kMaximumPPS });
                     }
                 }
                 else
@@ -254,8 +244,8 @@ int main(void) {
                 break;
 
             case G28: // Command from mDraw to move to origin
-                X->enqueueMove({ Move::Origin, Axis::kMaximumPPS });
-                Y->enqueueMove({ Move::Origin, Axis::kMaximumPPS });
+                X->enqueueMove({ Axis::Move::Origin, Axis::kMaximumPPS });
+                Y->enqueueMove({ Axis::Move::Origin, Axis::kMaximumPPS });
                 break;
 
             case M1: // Command from mDraw to SET pen position

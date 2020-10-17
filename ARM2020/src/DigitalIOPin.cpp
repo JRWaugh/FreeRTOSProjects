@@ -85,15 +85,25 @@ DigitalIOPin::DigitalIOPin(LPCPinMap pin_map, bool input, bool pullup, bool inve
     }
 }
 
+DigitalIOPin::DigitalIOPin(DigitalIOPin&& ioOld)
+: pin_map{ ioOld.pin_map }, channel{ ioOld.channel }, invert{ ioOld.invert }, IRQn{ ioOld.IRQn }, callback{ ioOld.callback }, xSemaphore{ ioOld.xSemaphore } {
+    io[channel] = this;
+    ioOld.IRQn = kNoIRQ;
+    ioOld.xSemaphore = nullptr;
+}
+
 DigitalIOPin::~DigitalIOPin() {
-    NVIC_DisableIRQ(IRQn);
+    if (IRQn != kNoIRQ) {
+        NVIC_DisableIRQ(IRQn);
 
-    Chip_PININT_DisableIntHigh(LPC_GPIO_PIN_INT, PININTCH(channel));
-    Chip_PININT_DisableIntLow(LPC_GPIO_PIN_INT, PININTCH(channel));
+        Chip_PININT_DisableIntHigh(LPC_GPIO_PIN_INT, PININTCH(channel));
+        Chip_PININT_DisableIntLow(LPC_GPIO_PIN_INT, PININTCH(channel));
 
-    io[channel] = nullptr;
+        io[channel] = nullptr;
+    }
 
-    vSemaphoreDelete(xSemaphore);
+    if (xSemaphore != nullptr)
+        vSemaphoreDelete(xSemaphore);
 }
 
 bool DigitalIOPin::read() const {

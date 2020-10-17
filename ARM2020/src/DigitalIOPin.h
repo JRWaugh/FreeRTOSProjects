@@ -12,12 +12,18 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "LPCPinMap.h"
+#include <utility>
 
 class DigitalIOPin {
 public:
     using onIRQCallback = void (*)(bool pressed);
 
     DigitalIOPin(LPCPinMap pin_map, bool input, bool pullup, bool invert, IRQn_Type IRQn = kNoIRQ, onIRQCallback callback = nullptr);
+
+    // Mustn't allow copies of a pin to exist
+    DigitalIOPin(DigitalIOPin const &) = delete;
+    DigitalIOPin& operator=(DigitalIOPin const &) = delete;
+    DigitalIOPin(DigitalIOPin&& ioOld);
     ~DigitalIOPin();
 
     bool read() const;

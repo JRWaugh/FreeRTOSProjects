@@ -11,12 +11,12 @@
 
 Axis::Axis(
         uint8_t ucOriginDirection,
-        DigitalIOPin&& ioStep,
-        DigitalIOPin&& ioDirection,
+        std::unique_ptr<DigitalIOPin> ioStep,
+        std::unique_ptr<DigitalIOPin> ioDirection,
         MoveBeginCallback onMoveBegin,
         MoveEndCallback onMoveEnd)
-: ucOriginDirection{ ucOriginDirection }, ioStep{ ioStep }, ioDirection{ ioDirection }, onMoveBegin{ onMoveBegin }, onMoveEnd{ onMoveEnd } {
-    ioStep.write(true);
+: ucOriginDirection{ ucOriginDirection }, ioStep{ std::move(ioStep) }, ioDirection{ std::move(ioDirection) }, onMoveBegin{ onMoveBegin }, onMoveEnd{ onMoveEnd } {
+    ioStep->write(true);
     xTaskCreate(prvStepperTask, nullptr, 78, this, tskIDLE_PRIORITY + 1UL, &xTaskHandle);
 }
 
@@ -35,9 +35,9 @@ void Axis::move(int32_t xStepsToMove, float fStepsPerSecond) {
     if (xStepsToMove == 0)
         return;
     else if (xStepsToMove > 0)
-        ioDirection.write(!ucOriginDirection);
+        ioDirection->write(!ucOriginDirection);
     else if (xStepsToMove < 0)
-        ioDirection.write(ucOriginDirection);
+        ioDirection->write(ucOriginDirection);
     xStepsRemaining = abs(xStepsToMove);
 
     xEventGroupWaitBits(xEventGroup, 1UL << Enabled, pdFALSE, pdTRUE, portMAX_DELAY);
@@ -50,18 +50,18 @@ void Axis::move(int32_t xStepsToMove, float fStepsPerSecond) {
 void Axis::step() {
     Axis::Stepping = this;
 
-    ioStep.write(false);
+    ioStep->write(false);
 
     if (xStepsRemaining && --xStepsRemaining == 0)
         endMove();
 
-    if (ioDirection.read() == ucOriginDirection)
+    if (ioDirection->read() == ucOriginDirection)
         --xCurrentPosition;
     else
         ++xCurrentPosition;
 
 
-    ioStep.write(true);
+    ioStep->write(true);
 }
 
 void Axis::calibrate() {
@@ -75,6 +75,7 @@ void Axis::calibrate() {
 }
 
 [[nodiscard]] int32_t Axis::getMaximumPosition() const {
+    waitForCalibration(portMAX_DELAY);
     return xMaximumPosition;
 }
 
@@ -94,7 +95,7 @@ BaseType_t Axis::enqueueMove(Move const & message) {
     return xMoveQueue.push_back(message, portMAX_DELAY);
 }
 
-[[nodiscard]] Move Axis::dequeueMove() {
+[[nodiscard]] Axis::Move Axis::dequeueMove() {
     return xMoveQueue.pop_front();
 }
 
@@ -110,7 +111,7 @@ void Axis::endMove() {
         onMoveEnd();
 
         if (xMaximumPosition == kPositionUnknown) {
-            if (ioDirection.read() == ucOriginDirection) {
+            if (ioDirection->read() == ucOriginDirection) {
                 xCurrentPosition = 0;
             } else {
                 xMaximumPosition = xCurrentPosition.load();
