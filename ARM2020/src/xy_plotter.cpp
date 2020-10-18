@@ -142,13 +142,17 @@ int main(void) {
     ioButtonResume = new DigitalIOPin{ { 0,  8 }, true, true, true, PIN_INT0_IRQn, Axis::ResumeCallback };
     ioButtonHalt   = new DigitalIOPin{ { 1,  6 }, true, true, true, PIN_INT1_IRQn, Axis::HaltCallback };
 
-    // Can be moved to static variables inside Axis if anybody wants to make a pretty interface for it.
+    /* Can be moved to static variables inside Axis if anybody wants to make a pretty interface for it.
+     * These could probably all use the same pin interrupt, but with the way the DigIO class is currently written,
+     * only the last switch created would have its callback called and it would be weird to read / interpret.
+     */
     ioLimitSwitch1 = new DigitalIOPin{ { 0,  9 }, true, true, true, PIN_INT2_IRQn, Axis::LimitSWCallback };
     ioLimitSwitch2 = new DigitalIOPin{ { 0, 29 }, true, true, true, PIN_INT3_IRQn, Axis::LimitSWCallback };
     ioLimitSwitch3 = new DigitalIOPin{ { 0,  0 }, true, true, true, PIN_INT4_IRQn, Axis::LimitSWCallback };
     ioLimitSwitch4 = new DigitalIOPin{ { 1,  3 }, true, true, true, PIN_INT5_IRQn, Axis::LimitSWCallback };
 
     X = new Axis{
+        PlotterConfig.uxWidth,
         PlotterConfig.ucOriginDirX,
         std::make_unique<DigitalIOPin>(DigitalIOPin{ { 0, 24 }, false, false, false }),
         std::make_unique<DigitalIOPin>(DigitalIOPin{ { 1,  0 }, false, false, false }),
@@ -162,6 +166,7 @@ int main(void) {
     };
 
     Y = new Axis{
+        PlotterConfig.uxHeight,
         PlotterConfig.ucOriginDirY,
         std::make_unique<DigitalIOPin>(DigitalIOPin{ { 0, 27 }, false, false, false }),
         std::make_unique<DigitalIOPin>(DigitalIOPin{ { 0, 28 }, false, false, false }),
@@ -174,6 +179,7 @@ int main(void) {
         }
     };
 
+    // Keijo won't like this big lambda, but it would be an error to ever have a second parser task created, so I'm not giving it a name!
     xTaskCreate([](void* pvParameters) {
         static auto constexpr MalformedCode = "Malformed code\r\n", UnknownCode = "Unknown code\r\n", OK = "OK\r\n";
         enum { G1 = 'G' + 1, G28 = 'G' + 28, M1 = 'M' + 1, M2 = 'M' + 2, M4 = 'M' + 4, M5 = 'M' + 5, M10 = 'M' + 10, M11 = 'M' + 11 };
@@ -184,18 +190,19 @@ int main(void) {
             void (*setPulseWidth)(uint8_t ucPulseWidth){ nullptr };
         } move;
 
-        // Should probably allow for some wiggle room with the ratio, but it works fine with the simulator for now. This is a bit of a rush job.
-        if (auto const fRatio = (float) X->getMaximumPosition() / Y->getMaximumPosition(); fRatio == (float) PlotterConfig.uxHeight / PlotterConfig.uxWidth) {
+        /* If the absolute difference in stepsPerMM is greater than some magic number, try swapping and check again.
+         * If it fails again, configuration must be wrong so enter infinite loop.
+         * Would be nicer to instead signal that any G-code besides M5 should be ignored and do the LED toggling in a software timer, but whatever!
+         */
+        if (std::fabs(X->getStepsPerMM() - Y->getStepsPerMM()) > 0.1f) {
             Axis::swap(X, Y);
-        } else if (fRatio != (float) PlotterConfig.uxWidth / PlotterConfig.uxHeight) {
-            while (true) {
-                Board_LED_Toggle(0);
-                vTaskDelay(configTICK_RATE_HZ);
+            if (std::fabs(X->getStepsPerMM() - Y->getStepsPerMM()) > 0.1f) {
+                while (true) {
+                    Board_LED_Toggle(0);
+                    vTaskDelay(configTICK_RATE_HZ);
+                }
             }
         }
-
-        float const fStepsPerMMX = X->getMaximumPosition() / PlotterConfig.uxWidth;
-        float const fStepsPerMMY = Y->getMaximumPosition() / PlotterConfig.uxHeight;
 
         // Ensure axes are at the origin before taking commands from mDraw.
         X->enqueueMove({ Axis::Move::Origin, Axis::kMaximumPPS });
@@ -218,14 +225,14 @@ int main(void) {
                         vTaskDelay(configTICK_RATE_HZ / 10);
 #if SIMULATOR
                         // Additional time is needed to ensure the laser is turned off in the simulator
-                        if (move.setPulseWidth == prvSetLaserPower)
+                        if (move.setPulseWidth == prvSetLaserPower && move.ucPulseWidth == 0)
                             vTaskDelay(configTICK_RATE_HZ / 10);
 #endif
                         move.setPulseWidth = nullptr;
                     }
 
-                    int32_t const xStepsX = move.isRelative ? std::roundf(move.fX * fStepsPerMMX) : std::roundf(move.fX * fStepsPerMMX - X->getCurrentPosition());
-                    int32_t const xStepsY = move.isRelative ? std::roundf(move.fY * fStepsPerMMY) : std::roundf(move.fY * fStepsPerMMY - Y->getCurrentPosition());
+                    int32_t const xStepsX = move.isRelative ? std::roundf(move.fX * X->getStepsPerMM()) : std::roundf(move.fX * X->getStepsPerMM() - X->getCurrentPosition());
+                    int32_t const xStepsY = move.isRelative ? std::roundf(move.fY * Y->getStepsPerMM()) : std::roundf(move.fY * Y->getStepsPerMM() - Y->getCurrentPosition());
 
                     // Scale speed so that both axes will move a different number of steps in the same time
                     if (auto absX{ std::abs(xStepsX) }, absY{ std::abs(xStepsY) }; absX < absY) {
@@ -284,11 +291,11 @@ int main(void) {
                     PlotterConfig.ucOriginDirY = ucDirY;
                     PlotterConfig.uxHeight = uxPlotterHeight;
                     PlotterConfig.uxWidth = uxPlotterWidth;
-                    PlotterConfig.ucSpeed = ucSpeed + 1;
+                    PlotterConfig.ucSpeed = ucSpeed + 1; // Change mDraw's 0 - 99 scale to 1 - 100
                     PlotterConfig.save();
 
-                    X->setOriginDirection(ucDirX);
-                    Y->setOriginDirection(ucDirY);
+                    X->setConfiguration(uxPlotterWidth, ucDirX);
+                    Y->setConfiguration(uxPlotterHeight, ucDirY);
                 } else
                     ITM_write(MalformedCode);
                 break;
@@ -322,7 +329,4 @@ int main(void) {
     xTaskCreate(cdc_task, "CDC", configMINIMAL_STACK_SIZE, nullptr, tskIDLE_PRIORITY + 1UL, nullptr);
 
     vTaskStartScheduler();
-
-    delete ioButtonResume;
-    delete ioButtonHalt;
 }

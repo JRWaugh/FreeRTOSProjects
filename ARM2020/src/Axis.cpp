@@ -10,12 +10,13 @@
 #include <cmath>
 
 Axis::Axis(
+        size_t uxSizeInMM,
         uint8_t ucOriginDirection,
         std::unique_ptr<DigitalIOPin> ioStep,
         std::unique_ptr<DigitalIOPin> ioDirection,
         MoveBeginCallback onMoveBegin,
         MoveEndCallback onMoveEnd)
-: ucOriginDirection{ ucOriginDirection }, ioStep{ std::move(ioStep) }, ioDirection{ std::move(ioDirection) }, onMoveBegin{ onMoveBegin }, onMoveEnd{ onMoveEnd } {
+: uxSizeInMM{ uxSizeInMM }, ucOriginDirection{ ucOriginDirection }, ioStep{ std::move(ioStep) }, ioDirection{ std::move(ioDirection) }, onMoveBegin{ onMoveBegin }, onMoveEnd{ onMoveEnd } {
     ioStep->write(true);
     xTaskCreate(prvStepperTask, nullptr, 78, this, tskIDLE_PRIORITY + 1UL, &xTaskHandle);
 }
@@ -41,10 +42,10 @@ void Axis::move(int32_t xStepsToMove, float fStepsPerSecond) {
     xStepsRemaining = abs(xStepsToMove);
 
     xEventGroupWaitBits(xEventGroup, 1UL << Enabled, pdFALSE, pdTRUE, portMAX_DELAY);
-    xEventGroupClearBits(xEventGroup, 1UL << (uxID + Stopped));
+    xEventGroupClearBits(xEventGroup, 1UL << (uxID + MoveEnded));
     isStepping = true;
     onMoveBegin(fStepsPerSecond);
-    waitForMoveEnd(portMAX_DELAY);
+    this->waitForMoveEnd(portMAX_DELAY);
 }
 
 void Axis::step() {
@@ -52,14 +53,10 @@ void Axis::step() {
 
     ioStep->write(false);
 
-    if (xStepsRemaining && --xStepsRemaining == 0)
+    if (--xStepsRemaining == 0)
         endMove();
 
-    if (ioDirection->read() == ucOriginDirection)
-        --xCurrentPosition;
-    else
-        ++xCurrentPosition;
-
+    ioDirection->read() == ucOriginDirection ? xCurrentPosition.operator--() : xCurrentPosition.operator++();
 
     ioStep->write(true);
 }
@@ -67,6 +64,7 @@ void Axis::step() {
 void Axis::calibrate() {
     move(INT32_MIN);
     move(INT32_MAX);
+    fStepsPerMM = (float) xMaximumPosition / uxSizeInMM;
     xEventGroupSetBits(xEventGroup, 1UL << (uxID + Calibrated));
 }
 
@@ -74,9 +72,9 @@ void Axis::calibrate() {
     return xCurrentPosition;
 }
 
-[[nodiscard]] int32_t Axis::getMaximumPosition() const {
-    waitForCalibration(portMAX_DELAY);
-    return xMaximumPosition;
+[[nodiscard]] float Axis::getStepsPerMM() const {
+    this->waitForCalibration(portMAX_DELAY);
+    return fStepsPerMM;
 }
 
 [[nodiscard]] size_t Axis::getID() const {
@@ -84,7 +82,7 @@ void Axis::calibrate() {
 }
 
 EventBits_t Axis::waitForMoveEnd(TickType_t xTicksToWait) const {
-    return xEventGroupWaitBits(xEventGroup, 1UL << (uxID + Stopped), pdFALSE, pdTRUE, xTicksToWait);
+    return xEventGroupWaitBits(xEventGroup, 1UL << (uxID + MoveEnded), pdFALSE, pdTRUE, xTicksToWait);
 }
 
 EventBits_t Axis::waitForCalibration(TickType_t xTicksToWait) const {
@@ -99,10 +97,15 @@ BaseType_t Axis::enqueueMove(Move const & message) {
     return xMoveQueue.pop_front();
 }
 
-void Axis::setOriginDirection(uint8_t ucOriginDirection) {
+void Axis::setConfiguration(size_t uxSizeInMM, uint8_t ucOriginDirection) {
+    this->waitForCalibration(portMAX_DELAY);
+
     if (this->ucOriginDirection != ucOriginDirection)
         xCurrentPosition = xMaximumPosition - xCurrentPosition;
     this->ucOriginDirection = ucOriginDirection;
+
+    this->uxSizeInMM = uxSizeInMM;
+    fStepsPerMM = (float) xMaximumPosition / uxSizeInMM;
 }
 
 void Axis::endMove() {
@@ -117,8 +120,9 @@ void Axis::endMove() {
                 xMaximumPosition = xCurrentPosition.load();
             }
         }
+
         portBASE_TYPE xHigherPriorityWoken = pdFALSE;
-        xEventGroupSetBitsFromISR(xEventGroup, 1UL << (uxID + Stopped), &xHigherPriorityWoken);
+        xEventGroupSetBitsFromISR(xEventGroup, 1UL << (uxID + MoveEnded), &xHigherPriorityWoken);
         portEND_SWITCHING_ISR(xHigherPriorityWoken);
     }
 }
